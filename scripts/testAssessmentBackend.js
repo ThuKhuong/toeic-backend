@@ -16,6 +16,10 @@ async function main() {
   try {
     await admin.query(`CREATE SCHEMA "${schema}"`);
     await pool.query(fs.readFileSync(path.join(__dirname, '../database/toeic_learning_system.sql'), 'utf8'));
+    // Keep the isolated fixture aligned with the existing question-source/grading migrations.
+    for (const migration of ['20261026_question_source.sql', '20261027_source_question_number.sql', '20261027_attempt_grading.sql']) {
+      await pool.query(fs.readFileSync(path.join(__dirname, '../database/migrations', migration), 'utf8'));
+    }
     const dbPath = require.resolve('../db');
     require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: pool };
     process.env.JWT_SECRET = 'isolated-backend-test-secret';
@@ -108,6 +112,36 @@ async function main() {
     await pool.query('UPDATE "User" SET role=$1 WHERE user_id=$2', ['ADMIN', other.user.user_id]);
     const adminLogin = await request('/api/auth/login', { method: 'POST',
       body: { email: 'other@example.invalid', password: 'Test-password-123' } });
+    // All content mutation APIs must reject an already attempted test, including
+    // transaction-based group edits and reuse that would move questions away.
+    const adminToken = adminLogin.token;
+    const blocked = await request('/api/admin/tests/auto-generate', {method:'POST',token:adminToken,status:409,
+      body:{test_id:testId,part_number:5,total_questions:1}});
+    assert.equal(blocked.code,'HAS_ATTEMPTS');
+    await request('/api/admin/tests/assign-questions', {method:'POST',token:adminToken,status:409,
+      body:{test_id:testId,question_ids:[questionIds[0]]}});
+    await request(`/api/admin/tests/${testId}`, {method:'PUT',token:adminToken,status:409,body:{test_name:'Forbidden edit'}});
+    for (const body of [{question_text:'Forbidden'}, {correct_answer:'D'}, {test_id:null},
+      {choices:[{label:'A',text:'Changed'}]}]) {
+      await request(`/api/admin/questions/${questionIds[0]}`, {method:'PUT',token:adminToken,status:409,body});
+    }
+    await request(`/api/admin/listening/questions/${questionIds[0]}`, {method:'PUT',token:adminToken,status:409,body:{image_url:'changed.png'}});
+    await request('/api/admin/questions', {method:'POST',token:adminToken,status:409,
+      body:{test_id:testId,part_number:5,question_text:'Forbidden new question'}});
+    // The current selector excludes assigned questions and rejects an empty eligible pool.
+    await request('/api/admin/tests/create-with-questions', {method:'POST',token:adminToken,status:400,
+      body:{test_name:'Forbidden reuse',part_number:5,total_questions:1,reuse_assigned:true}});
+    assert.equal((await pool.query("SELECT 1 FROM tests WHERE test_name='Forbidden reuse'")).rowCount,0);
+    const passageId = (await pool.query("INSERT INTO reading_passages(title,content) VALUES ('Guard passage','Original') RETURNING passage_id")).rows[0].passage_id;
+    const materialId = (await pool.query("INSERT INTO listening_materials(title,audio_url) VALUES ('Guard audio','original.mp3') RETURNING material_id")).rows[0].material_id;
+    await pool.query('UPDATE questions SET passage_id=$1,material_id=$2 WHERE question_id=$3',[passageId,materialId,questionIds[0]]);
+    await request(`/api/admin/questions/passage/${passageId}`, {method:'PUT',token:adminToken,status:409,
+      body:{content:'Forbidden',questions:[]}});
+    await request(`/api/admin/listening/materials/${materialId}`, {method:'PUT',token:adminToken,status:409,
+      body:{audio_url:'changed.mp3',transcript:'Changed'}});
+    assert.equal((await pool.query('SELECT content FROM reading_passages WHERE passage_id=$1',[passageId])).rows[0].content,'Original');
+    assert.equal((await pool.query('SELECT audio_url FROM listening_materials WHERE material_id=$1',[materialId])).rows[0].audio_url,'original.mp3');
+    assert.equal((await pool.query('SELECT COUNT(*)::integer AS n FROM questions WHERE test_id=$1',[testId])).rows[0].n,2);
     const adminReview = await request(`/api/admin/tests/attempts/${attempt.attempt_id}/detail`, { token: adminLogin.token });
     const draft = await request('/api/admin/tests', { method: 'POST', token: adminLogin.token, status: 201,
       body: { test_name: 'Draft visibility', test_type: 'part_test', time_limit: 30, difficulty_level: 1, parts: [5], is_active: false } });
@@ -122,18 +156,20 @@ async function main() {
     await request(`/api/admin/tests/${draft.test_id}`, { method: 'PUT', token: adminLogin.token, body: { is_active: false } });
     assert((await request('/api/admin/tests', { token: adminLogin.token })).some(t => t.test_id === draft.test_id));
     await request(`/api/tests/${draft.test_id}`, { status: 404 });
+    await pool.query("INSERT INTO questions(question_text,question_type,part_number,correct_answer) VALUES ('Draft fixture','reading',5,'A')");
     const generatedDraft = await request('/api/admin/tests/create-with-questions', { method: 'POST', token: adminLogin.token, status: 201,
-      body: { test_name: 'Generated draft', test_type: 'part_test', time_limit: 30, difficulty_level: 1, parts: [5], part_number: 5, total_questions: 0, is_active: false } });
+      body: { test_name: 'Generated draft', test_type: 'part_test', time_limit: 30, difficulty_level: 1, parts: [5], part_number: 5, total_questions: 1, is_active: false } });
     assert.equal((await pool.query("SELECT is_active FROM tests WHERE test_name='Generated draft'")).rows[0].is_active, false);
     assert.equal(adminReview.answers[0].question_text, 'Original question 1');
     await request(`/api/admin/tests/attempts/${attempt.attempt_id}/detail`, { token, status: 403 });
     await request(`/api/admin/tests/attempts/${pending.attempt_id}/detail`, { token: adminLogin.token, status: 409 });
-    for (const endpoint of ['/api/admin/users', '/api/admin/tests', '/api/admin/vocabulary',
-      '/api/admin/vocabulary/topics', '/api/admin/questions?part_number=5',
+    for (const endpoint of ['/api/admin/users', '/api/admin/tests', '/api/admin/questions?part_number=5',
       '/api/admin/listening/materials', '/api/admin/listening/questions/part/1/grouped',
       '/api/admin/tests/attempts/all', '/api/student/vocabulary']) {
       await request(endpoint, { token: adminLogin.token });
     }
+    await request('/api/admin/vocabulary', { token: adminLogin.token, status: 404 });
+    await request('/api/admin/vocabulary/topics', { token: adminLogin.token, status: 404 });
     await request('/api/admin/srs', { token: adminLogin.token, status: 404 });
     await request('/api/admin/gamification/stats/global', { token: adminLogin.token, status: 404 });
     await request('/api/srs',{token,status:404});
@@ -198,14 +234,62 @@ async function main() {
     await request(`/api/tests/${testId}/attempt`,{method:'POST',token,status:404});
     assert.equal((await request(`/api/tests/attempts/${pending.attempt_id}/resume`,{token:other.token})).attempt_id,pending.attempt_id);
     await request(`${url}/results`,{token});
+    const resultsBeforeDeletion = await request(`${url}/results`,{token});
     const countBefore=(await pool.query('SELECT COUNT(*) AS n FROM user_test_attempts WHERE test_id=$1',[testId])).rows[0].n;
-    await request(`/api/admin/tests/${testId}`,{method:'DELETE',token:adminLogin.token,status:400});
-    assert.equal((await pool.query('SELECT COUNT(*) AS n FROM user_test_attempts WHERE test_id=$1',[testId])).rows[0].n,countBefore);
-    await request(`/api/admin/tests/${testId}`,{method:'PUT',token,status:403,body:{publication_status:'published'}});
     await request(`/api/admin/tests/${testId}`,{method:'PUT',token:adminLogin.token,status:400,body:{publication_status:'invalid'}});
-    await request(`/api/admin/tests/${testId}`,{method:'PUT',token:adminLogin.token,body:{publication_status:'published'}});
-    assert((await request('/api/tests')).some(t=>t.test_id===testId));
-    console.log('PASS: assessment, resume, expiry, mixed-difficulty assignment, publication states, preserved history, delete protection');
+    await request(`/api/admin/tests/${testId}`,{method:'DELETE',token:adminLogin.token});
+    assert.equal((await pool.query('SELECT COUNT(*) AS n FROM user_test_attempts WHERE test_id=$1',[testId])).rows[0].n,countBefore);
+    assert((await pool.query('SELECT deleted_at FROM tests WHERE test_id=$1',[testId])).rows[0].deleted_at);
+    assert(!(await request('/api/tests')).some(t=>t.test_id===testId));
+    assert(!(await request('/api/admin/tests',{token:adminLogin.token})).some(t=>t.test_id===testId));
+    await request(`/api/tests/${testId}`,{status:404});
+    await request(`/api/admin/tests/${testId}`,{token:adminLogin.token,status:404});
+    await request(`/api/tests/${testId}/attempt`,{method:'POST',token,status:404});
+    await request(`/api/admin/tests/${testId}`,{method:'PUT',token:adminLogin.token,status:404,body:{publication_status:'published'}});
+    await request(`/api/admin/tests/${testId}`,{method:'DELETE',token:adminLogin.token,status:404});
+    assert.deepEqual(await request(`${url}/results`,{token}), resultsBeforeDeletion);
+    assert.equal((await request(`/api/tests/attempts/${pending.attempt_id}/resume`,{token:other.token})).attempt_id,pending.attempt_id);
+    assert((await require('../src/modules/tests/testsModel').getUserAttempts(learner.user.user_id)).some(a=>a.test_id===testId));
+    // Unused content remains editable, and assignment to an unused draft works.
+    const freePassage = (await pool.query("INSERT INTO reading_passages(content) VALUES ('Editable') RETURNING passage_id")).rows[0].passage_id;
+    const freeQuestion = (await pool.query(`INSERT INTO questions(question_text,part_number,question_type,correct_answer,passage_id)
+      VALUES ('Editable question',6,'reading','A',$1) RETURNING question_id`,[freePassage])).rows[0].question_id;
+    await request(`/api/admin/questions/passage/${freePassage}`, {method:'PUT',token:adminToken,
+      body:{content:'Updated passage',questions:[{question_id:freeQuestion,question_text:'Updated question',correct_answer:'B',
+        choices:['A','B','C','D'].map(label=>({label,text:label}))}]}});
+    assert.equal((await pool.query('SELECT correct_answer FROM questions WHERE question_id=$1',[freeQuestion])).rows[0].correct_answer,'B');
+    const freeAudio = (await pool.query("INSERT INTO listening_materials(title,audio_url) VALUES ('Editable audio','old.mp3') RETURNING material_id")).rows[0].material_id;
+    await request(`/api/admin/listening/materials/${freeAudio}`,{method:'PUT',token:adminToken,body:{audio_url:'new.mp3'}});
+    assert.equal((await pool.query('SELECT audio_url FROM listening_materials WHERE material_id=$1',[freeAudio])).rows[0].audio_url,'new.mp3');
+    const unused = await testService.adminCreateTest({test_name:'Unused deleted test',is_active:false});
+    await request('/api/admin/tests/auto-generate',{method:'POST',token:adminToken,status:400,
+      body:{test_id:unused.test_id,part_number:7,total_questions:1,reuse_assigned:true}});
+    assert.equal((await pool.query('SELECT test_id FROM questions WHERE question_id=$1',[questionIds[0]])).rows[0].test_id,testId);
+    await request('/api/admin/tests/assign-questions',{method:'POST',token:adminToken,
+      body:{test_id:unused.test_id,question_ids:[freeQuestion]}});
+    assert.equal((await pool.query('SELECT test_id FROM questions WHERE question_id=$1',[freeQuestion])).rows[0].test_id,unused.test_id);
+
+    const stillAssigned = await request(`/api/admin/questions/${freeQuestion}`,{method:'DELETE',token:adminToken,status:409});
+    assert.equal(stillAssigned.code,'IN_TEST');
+    await request(`/api/admin/tests/${unused.test_id}`,{method:'DELETE',token:adminLogin.token});
+    assert.equal(await testService.adminGetTestDetails(unused.test_id), null);
+    await request(`/api/admin/questions/${freeQuestion}`,{method:'DELETE',token:adminToken});
+    assert.equal((await pool.query('SELECT 1 FROM questions WHERE question_id=$1',[freeQuestion])).rowCount,0);
+    const preserved = await request(`/api/admin/questions/${questionIds[1]}`,{method:'DELETE',token:adminToken,status:409});
+    assert.equal(preserved.code,'HAS_ATTEMPTS');
+    assert.match(preserved.error,/lịch sử/);
+    assert.equal((await pool.query('SELECT 1 FROM questions WHERE question_id=$1',[questionIds[1]])).rowCount,1);
+    assert.deepEqual(await request(`${url}/results`,{token}),resultsBeforeDeletion);
+    const groupQuestion = (await pool.query(`INSERT INTO questions(test_id,passage_id,part_number,question_type,correct_answer)
+      VALUES ($1,$2,6,'reading','A') RETURNING question_id`,[unused.test_id,freePassage])).rows[0].question_id;
+    await request(`/api/admin/questions/passage/${freePassage}`,{method:'DELETE',token:adminToken});
+    assert.equal((await pool.query('SELECT 1 FROM questions WHERE question_id=$1',[groupQuestion])).rowCount,0);
+    const listeningQuestion = (await pool.query(`INSERT INTO questions(test_id,part_number,question_type,correct_answer,material_id)
+      VALUES ($1,1,'listening','A',$2) RETURNING question_id`,[unused.test_id,freeAudio])).rows[0].question_id;
+    await request(`/api/admin/listening/questions/${listeningQuestion}`,{method:'DELETE',token:adminToken});
+    assert.equal((await pool.query('SELECT 1 FROM questions WHERE question_id=$1',[listeningQuestion])).rowCount,0);
+    console.log('PASS: assessment, resume, expiry, publication, soft deletion, preserved history, attempted-content guards and unused-content editing');
+
   } finally {
     if (server) await new Promise((resolve,reject) => server.close(error => error ? reject(error) : resolve()));
     await pool.end();

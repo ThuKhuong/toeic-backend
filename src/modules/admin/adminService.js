@@ -4,14 +4,12 @@ const AdminModel = require("./adminModel");
 exports.getDashboardStats = async () => {
   const [
     students,
-    vocabulary,
     tests,
     questions,
     recentRaw,
     quickRaw,
   ] = await Promise.all([
     AdminModel.countStudents(),
-    AdminModel.countVocabulary(),
     AdminModel.countTests(),
     AdminModel.countQuestions(),
     AdminModel.getRecentActivity(),
@@ -23,7 +21,6 @@ exports.getDashboardStats = async () => {
   return {
     stats: {
       students: parseInt(students.rows[0].count),
-      vocabulary: parseInt(vocabulary.rows[0].count),
       tests: parseInt(tests.rows[0].count),
       questions: parseInt(questions.rows[0].count),
     },

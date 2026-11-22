@@ -25,6 +25,6 @@ for (const folder of ['srs', 'gamification']) {
   assert.ok(!fs.existsSync(dir) || files(dir).length === 0, `Removed module still contains code: ${folder}`);
 }
 const schema = fs.readFileSync(path.join(root, 'database/toeic_learning_system.sql'), 'utf8');
-assert.equal([...schema.matchAll(/CREATE TABLE\s/gi)].length, 22);
-console.log(`PASS: syntax and local imports for ${runtimeFiles.length} backend files; no retired database references; current schema has 22 tables.`);
+assert.equal([...schema.matchAll(/CREATE TABLE\s/gi)].length, 25);
+console.log(`PASS: syntax and local imports for ${runtimeFiles.length} backend files; no retired database references; current schema has 25 tables.`);
 

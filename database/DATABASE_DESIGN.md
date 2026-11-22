@@ -7,7 +7,7 @@ Backend giữ các nhóm chức năng:
 | Nhóm | Bảng |
 |---|---|
 | Tài khoản, thống kê | User, user_stats |
-| Từ vựng | vocabulary_topics, vocabulary |
+| Từ vựng | vocabulary_topics, vocabulary, user_vocabulary_learning, vocabulary_study_sessions, vocabulary_quiz_sessions |
 | Ngữ liệu | reading_passages, listening_materials |
 | Đề và câu hỏi | tests, questions, answer_choices, question_groups, question_group_passages |
 | Làm bài | user_test_attempts, attempt_questions, user_answers |
@@ -18,6 +18,8 @@ Không còn module SRS, XP, cấp độ người dùng, chuỗi ngày học, m�
 ## Database đã được tạo
 
 Không chạy lại schema và không nạp các file trong `legacy/`. Giữ cấu hình kết nối hiện tại trong `.env`, chạy backend bằng `npm run dev` từ thư mục `toeic_be`.
+
+Từ vựng do người dùng tự nhập, admin không còn quản lý từ/chủ đề. Để bật sổ từ cá nhân, flashcard và tiến độ quiz, chạy `npm run migrate:personal-vocabulary`. Chi tiết luồng và API: [VOCABULARY_LEARNING.md](VOCABULARY_LEARNING.md).
 
 ## Kiểm tra
 

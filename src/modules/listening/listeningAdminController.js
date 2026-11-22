@@ -1,3 +1,4 @@
+const { assertQuestionsEditable, assertMaterialEditable, withContentTransaction } = require('../tests/contentGuard');
 const ListeningService = require("./listeningService");
 
 
@@ -16,6 +17,7 @@ exports.getListeningMaterials = async (req, res) => {
     const data = await ListeningService.getListeningMaterials(req.query);
     res.json(data);
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error(e);
     res.status(500).json({ error: "Failed to fetch listening materials" });
   }
@@ -28,6 +30,7 @@ exports.getListeningMaterialById = async (req, res) => {
       return res.status(404).json({ error: "Listening material not found" });
     res.json(data);
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     res.status(500).json({ error: "Failed to fetch listening material" });
   }
 };
@@ -37,6 +40,7 @@ exports.createListeningMaterial = async (req, res) => {
     const material = await ListeningService.createListeningMaterial(req.body);
     res.status(201).json(material);
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error(e);
     res
       .status(500)
@@ -54,6 +58,7 @@ exports.updateListeningMaterial = async (req, res) => {
       return res.status(404).json({ error: "Listening material not found" });
     res.json(updated);
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     res
       .status(500)
       .json({ error: e.message || "Failed to update listening material" });
@@ -71,6 +76,7 @@ exports.deleteListeningMaterial = async (req, res) => {
       message: "Listening material và file audio đã được xóa thành công",
     });
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     const errorMessage = e.message || "Failed to delete listening material";
     // Nếu là lỗi do đang trong bài thi, trả về 400
     if (errorMessage.includes("đang được sử dụng trong")) {
@@ -90,6 +96,7 @@ exports.getListeningQuestionsByPart = async (req, res) => {
     );
     res.json(data);
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error(e);
     res
       .status(500)
@@ -106,6 +113,7 @@ exports.getListeningQuestionsGrouped = async (req, res) => {
     );
     res.json(data);
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error(
       `Error fetching Part ${req.params.part} grouped questions:`,
       e
@@ -126,6 +134,7 @@ exports.getQuestionsByMaterialId = async (req, res) => {
     );
     res.json(data);
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error(e);
     res.status(500).json({ error: "Failed to fetch questions by material" });
   }
@@ -140,10 +149,21 @@ exports.createListeningQuestion = async (req, res) => {
     );
     res.status(201).json(question);
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error(e);
     res
       .status(500)
       .json({ error: e.message || "Failed to create listening question" });
+  }
+};
+
+exports.updateListeningQuestion = async (req, res) => {
+  try {
+    const updated = await require('../questions/questionService').updateQuestion(req.params.id, req.body);
+    if (!updated) return res.status(404).json({ error: 'Question not found' });
+    res.json(updated);
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, code: error.code });
   }
 };
 
@@ -157,6 +177,7 @@ exports.deleteListeningQuestion = async (req, res) => {
     }
     res.json({ message: "Xóa câu hỏi thành công" });
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     // Hiển thị error message từ service (đã có thông báo chi tiết)
     const errorMessage = e.message || "Không thể xóa câu hỏi";
     res.status(400).json({ error: errorMessage });
@@ -172,6 +193,7 @@ exports.getListeningStatistics = async (req, res) => {
     const stats = await ListeningService.getListeningStatistics();
     res.json(stats);
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error(e);
     res.status(500).json({ error: "Failed to fetch listening statistics" });
   }
@@ -256,6 +278,8 @@ exports.fixMediaUrls = async (req, res) => {
       await client.query("BEGIN");
       let uq = 0,
         um = 0;
+      await assertQuestionsEditable(client, qres.rows.map(row => row.question_id));
+      for (const row of mres.rows) await assertMaterialEditable(client, row.material_id);
       for (const row of qres.rows) {
         const zipName = extractZipNameFromPublic(row.audio_url);
         // Try to build directly from audio base
@@ -300,12 +324,14 @@ exports.fixMediaUrls = async (req, res) => {
       await client.query("COMMIT");
       res.json({ updated_questions: uq, updated_materials: um });
     } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       await client.query("ROLLBACK");
       throw e;
     } finally {
       client.release();
     }
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     res.status(500).json({ error: e.message || "Failed to fix media URLs" });
   }
 };
@@ -322,6 +348,7 @@ exports.debugImages = async (req, res) => {
     );
     res.json({ count: result.rows.length, rows: result.rows });
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     res.status(500).json({ error: e.message || "debug failed" });
   }
 };
@@ -329,7 +356,12 @@ exports.debugImages = async (req, res) => {
 exports.fixImagesFast = async (req, res) => {
   try {
     const pool = require("../../../db");
-    const result = await pool.query(
+    const result = await withContentTransaction(async client => {
+      const affected = await client.query(`SELECT q.question_id FROM questions q
+        JOIN listening_materials lm ON q.material_id=lm.material_id
+        WHERE q.question_type='listening' AND q.image_url IS NOT NULL AND q.image_url NOT LIKE '/uploads/%'`);
+      await assertQuestionsEditable(client, affected.rows.map(q => q.question_id));
+      return client.query(
       `UPDATE questions q
        SET image_url = split_part(lm.audio_url, '/audio/', 1) || '/' || q.image_url
        FROM listening_materials lm
@@ -339,8 +371,10 @@ exports.fixImagesFast = async (req, res) => {
          AND q.image_url NOT LIKE '/uploads/%'
        RETURNING q.question_id, q.image_url`
     );
+    });
     res.json({ updated: result.rows.length });
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     res.status(500).json({ error: e.message || "fix images failed" });
   }
 };
@@ -363,16 +397,17 @@ exports.updateQuestionImage = async (req, res) => {
         .status(400)
         .json({ error: "No audio base to build image URL" });
     const newUrl = `${base}/${String(row.image_url).replace(/^[\\/]+/, "")}`;
-    await pool.query(`UPDATE questions SET image_url=$1 WHERE question_id=$2`, [
-      newUrl,
-      id,
-    ]);
+    await withContentTransaction(async client => {
+      await assertQuestionsEditable(client, [Number(id)]);
+      await client.query('UPDATE questions SET image_url=$1 WHERE question_id=$2', [newUrl, id]);
+    });
     const updated = await pool.query(
       `SELECT question_id, image_url FROM questions WHERE question_id=$1`,
       [id]
     );
     res.json(updated.rows[0]);
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     res.status(500).json({ error: e.message || "update image failed" });
   }
 };
@@ -409,15 +444,16 @@ exports.convertImagesToPng = async (req, res) => {
         next = url.replace(/\.jpe?g$/i, ".png");
       }
       if (next !== cur) {
-        await pool.query(
-          `UPDATE questions SET image_url=$1 WHERE question_id=$2`,
-          [next, row.question_id]
-        );
+        await withContentTransaction(async client => {
+          await assertQuestionsEditable(client, [row.question_id]);
+          await client.query('UPDATE questions SET image_url=$1 WHERE question_id=$2', [next, row.question_id]);
+        });
         updated++;
       }
     }
     res.json({ updated });
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     res.status(500).json({ error: e.message || "convert failed" });
   }
 };

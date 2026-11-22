@@ -1,0 +1,1 @@
+const fs=require('node:fs');const path=require('node:path');const pool=require('../db');(async()=>{try{await pool.query(fs.readFileSync(path.join(__dirname,'../database/migrations/20261027_source_question_number.sql'),'utf8'));console.log('Source question numbering migration applied');}finally{await pool.end();}})().catch(e=>{console.error(e.message);process.exitCode=1;});

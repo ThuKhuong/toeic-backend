@@ -8,7 +8,7 @@ async function getAllTests(part = null, { includeDrafts = false } = {}) {
       (SELECT COUNT(*) FROM questions q WHERE q.test_id = t.test_id) AS total_questions,
       (SELECT COUNT(*) FROM user_test_attempts uta WHERE uta.test_id = t.test_id) AS attempts_count
     FROM tests t
-    WHERE ${includeDrafts ? 'TRUE' : 't.is_active = true'}
+    WHERE t.deleted_at IS NULL AND ${includeDrafts ? 'TRUE' : 't.is_active = true'}
   `;
 
   const params = [];
@@ -33,7 +33,7 @@ async function getTestById(id, { includeDrafts = false } = {}) {
     SELECT t.*, u.full_name as created_by_name
     FROM tests t
     LEFT JOIN "User" u ON t.created_by = u.user_id
-    WHERE t.test_id = $1 ${includeDrafts ? '' : 'AND t.is_active = true'}
+    WHERE t.test_id = $1 AND t.deleted_at IS NULL ${includeDrafts ? '' : 'AND t.is_active = true'}
   `;
   const result = await pool.query(query, [id]);
   return result.rows[0];
@@ -41,8 +41,8 @@ async function getTestById(id, { includeDrafts = false } = {}) {
 
 async function getTestQuestions(test_id) {
   const query = `
-        SELECT q.*, COALESCE((SELECT jsonb_agg(jsonb_build_object('passage_id',p.passage_id,'title',p.title,'content',p.content,'image_url',p.image_url,'position',gp.position) ORDER BY gp.position) FROM question_group_passages gp JOIN reading_passages p USING(passage_id) WHERE gp.group_id=q.group_id),'[]'::jsonb) AS passages, 
-          rp.title as passage_title, rp.content as passage_content,
+        SELECT q.*, COALESCE((SELECT jsonb_agg(jsonb_build_object('passage_id',p.passage_id,'title',p.title,'content',p.content,'image_url',p.image_url,'translation',to_jsonb(p)->>'translation','explanation',to_jsonb(p)->>'explanation','position',gp.position) ORDER BY gp.position) FROM question_group_passages gp JOIN reading_passages p USING(passage_id) WHERE gp.group_id=q.group_id),'[]'::jsonb) AS passages, 
+          rp.title as passage_title, rp.content as passage_content, to_jsonb(rp)->>'translation' as passage_translation, to_jsonb(rp)->>'explanation' as passage_explanation,
           rp.image_url as passage_image_url,
            lm.title as material_title, lm.audio_url as material_audio,
            lm.transcript as material_transcript,
@@ -86,14 +86,14 @@ async function createTest({
   created_by,
   is_active = true,
   publication_status,
-}) {
+}, client = pool) {
   const query = `
     INSERT INTO tests
     (test_name, test_type, description, time_limit, difficulty_level, parts, created_by, is_active, publication_status)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
     RETURNING *
   `;
-  const result = await pool.query(query, [
+  const result = await client.query(query, [
     test_name,
     test_type,
     description,
@@ -107,7 +107,7 @@ async function createTest({
   return result.rows[0];
 }
 
-async function updateTest(id, data) {
+async function updateTest(id, data, client = pool) {
   const {
     test_name,
     test_type,
@@ -129,11 +129,11 @@ async function updateTest(id, data) {
       is_active = COALESCE($7, is_active),
       publication_status = COALESCE($9, publication_status),
       updated_at = CURRENT_TIMESTAMP
-    WHERE test_id = $8
+    WHERE test_id = $8 AND deleted_at IS NULL
     RETURNING *
   `;
 
-  const result = await pool.query(query, [
+  const result = await client.query(query, [
     test_name,
     test_type,
     description,
@@ -148,13 +148,29 @@ async function updateTest(id, data) {
 }
 
 async function softDeleteTest(id) {
+  const client = await pool.connect();
+  try {
+  await client.query('BEGIN');
+  const locked = await client.query('SELECT test_id FROM tests WHERE test_id=$1 AND deleted_at IS NULL FOR UPDATE', [id]);
+  if (!locked.rowCount) { await client.query('COMMIT'); return undefined; }
   const query = `
-    UPDATE tests SET is_active = false, updated_at = CURRENT_TIMESTAMP
-    WHERE test_id = $1
+    UPDATE tests SET deleted_at = CURRENT_TIMESTAMP, publication_status = 'unpublished',
+      is_active = false, updated_at = CURRENT_TIMESTAMP
+    WHERE test_id = $1 AND deleted_at IS NULL
     RETURNING *
   `;
-  const result = await pool.query(query, [id]);
+  const result = await client.query(query, [id]);
+  // An unused deleted form must not strand its bank questions. Locking the
+  // parent test serializes this with attempt creation. Retain all links when
+  // any attempt or historical question reference exists.
+  await client.query(`UPDATE questions q SET test_id=NULL WHERE q.test_id=$1
+    AND NOT EXISTS (SELECT 1 FROM user_test_attempts a WHERE a.test_id=$1)
+    AND NOT EXISTS (SELECT 1 FROM attempt_questions aq JOIN questions old ON old.question_id=aq.question_id WHERE old.test_id=$1)
+    AND NOT EXISTS (SELECT 1 FROM user_answers ua JOIN questions old ON old.question_id=ua.question_id WHERE old.test_id=$1)`, [id]);
+  await client.query('COMMIT');
   return result.rows[0];
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
 }
 
 // ATTEMPTS
@@ -176,6 +192,9 @@ async function getUserAttempts(user_id) {
     SELECT uta.attempt_id, uta.user_id, uta.test_id, t.test_name,
            uta.start_time, uta.end_time, uta.total_correct, uta.total_questions,
            CASE WHEN uta.is_completed THEN uta.score END AS score,
+           CASE WHEN uta.is_completed THEN (uta.grading_result->'toeic'->>'total')::integer END AS toeic_estimated_total,
+           CASE WHEN uta.is_completed THEN (uta.grading_result->'toeic'->>'listening')::integer END AS toeic_estimated_listening,
+           CASE WHEN uta.is_completed THEN (uta.grading_result->'toeic'->>'reading')::integer END AS toeic_estimated_reading,
            uta.time_spent, uta.is_completed,
            (SELECT COUNT(*)::integer FROM user_answers ua WHERE ua.attempt_id=uta.attempt_id AND ua.user_answer IS NOT NULL) AS answered_count
     FROM user_test_attempts uta

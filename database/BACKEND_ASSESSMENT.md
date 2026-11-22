@@ -33,7 +33,7 @@ Script tạo schema ngẫu nhiên, nạp SQL, chạy HTTP API và xóa đúng sc
 
 ## Dọn mã và SQL cũ
 
-- Schema đang sử dụng: toeic_learning_system.sql (22 bảng, gồm import_batches).
+- Schema đang sử dụng: toeic_learning_system.sql (25 bảng, gồm import_batches và ba bảng học từ vựng cá nhân; xem VOCABULARY_LEARNING.md).
 - SQL, seed và tài liệu của các phiên bản cũ được lưu riêng trong legacy/, không nạp vào database hiện tại.
 - Thống kê theo Part lấy từ attempt_questions của lượt đã hoàn tất; tính cả câu bỏ trống và không phụ thuộc câu hỏi đã sửa trong ngân hàng.
 - Chạy npm test để kiểm tra cú pháp, import nội bộ và phát hiện tham chiếu cũ; npm run test:integration để kiểm tra với PostgreSQL thử nghiệm.

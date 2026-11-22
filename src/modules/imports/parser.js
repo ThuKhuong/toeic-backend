@@ -1,6 +1,15 @@
 const { readWorkbook, rows } = require('./archive');
 const { text, error, invalid, MAX_ROWS } = require('./importService');
-function parseArchive(context, part) {
+const XLSX = require('xlsx');
+function isQuickQuestionSheet(sheet) {
+  if (!sheet?.['!ref']) return false;
+  const range = XLSX.utils.decode_range(sheet['!ref']);
+  for (let column = range.s.c; column <= Math.min(range.e.c, range.s.c + 100); column++) {
+    if (sheet[XLSX.utils.encode_cell({ r: range.s.r, c: column })]?.v === 'question_number') return true;
+  }
+  return false;
+}
+function parseArchive(context, part, options = {}) {
   const items = [], errors = [];
   function media(value,file,type,source,column) {
     try { return context.media(value,file,type); } catch(e) { errors.push(error(source,column,e.message)); return null; }
@@ -9,10 +18,21 @@ function parseArchive(context, part) {
     let wb;
     try { wb = readWorkbook(f); } catch(e) { errors.push(error({file:f.rel},'file',e.message)); continue; }
     if (!part) {
-      for (const sn of wb.SheetNames) {
+      const quickSheets = wb.SheetNames.filter(sn => isQuickQuestionSheet(wb.Sheets[sn]));
+      if (quickSheets.length > 1) {
+        errors.push(error({file:f.rel},'sheet','Mỗi workbook nhập nhanh chỉ được có một sheet câu hỏi chứa cột question_number.'));
+        continue;
+      }
+      const questionSheet = quickSheets[0];
+      const quick = Boolean(questionSheet);
+      if (quick && ![1,2,3,4].includes(options.listeningPart)) {
+        errors.push(error({file:f.rel},'part','Mẫu nhanh cần chọn Part 1, Part 2, Part 3 hoặc Part 4 tại màn hình nhập nhanh.'));
+        continue;
+      }
+      for (const sn of quick ? [questionSheet] : wb.SheetNames) {
         const source = {file:f.rel,sheet:sn};
         let parsed;
-        try { parsed = rows(wb.Sheets[sn],source); } catch(e) { errors.push(...(e.errors || [error(source,'sheet',e.message)])); continue; }
+        try { parsed = quick ? require('./quickListening').quickRows(context, wb, f.rel, options.listeningPart, errors, questionSheet) : rows(wb.Sheets[sn],source); } catch(e) { errors.push(...(e.errors || [error(source,'sheet',e.message)])); continue; }
         let previous = null;
         for (const r of parsed) {
           const pn = Number(r.part_number || r.part || r.Part);
@@ -42,7 +62,7 @@ function parseArchive(context, part) {
       for(const p of passages) {
         const key=text(p.key);
         if(!key || map.has(key)) { errors.push(error(p._source,'key',key ? 'Mã ngữ liệu bị trùng trong workbook.' : 'Thiếu mã ngữ liệu.')); continue; }
-        map.set(key,{title:text(p.title),content:text(p.content),image_url:media(p.image_url,f.rel,'image',p._source,'image_url')});
+        map.set(key,{title:text(p.title),content:text(p.content),translation:text(p.translation),explanation:text(p.explanation),image_url:media(p.image_url,f.rel,'image',p._source,'image_url')});
       }
       for(const q of questions) {
         const keys=text(q.passage_keys || q.passage_key).split(/[|;,]/).map(text).filter(Boolean);

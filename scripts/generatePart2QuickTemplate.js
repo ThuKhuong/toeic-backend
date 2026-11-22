@@ -1,0 +1,11 @@
+const path=require('node:path');
+const Zip=require('adm-zip');const X=require('xlsx');
+const root=path.resolve(__dirname,'../../toeic_admin_vite/public/templates');
+const source=new Zip(path.join(root,'toeic_listening_part1_quick.zip'));
+const tone=source.getEntries().find(e=>e.entryName.endsWith('.wav')).getData();
+const wb=X.utils.book_new();const sheet=X.utils.json_to_sheet(Array.from({length:6},(_,i)=>({question_number:i+7,correct_answer:['A','B','C'][i%3],explanation:'Thay bằng lời thoại, bản dịch và lời giải.'})));
+sheet['!cols']=[{wch:20},{wch:20},{wch:90}];X.utils.book_append_sheet(wb,sheet,'questions');
+const zip=new Zip();zip.addFile('questions.xlsx',X.write(wb,{type:'buffer',bookType:'xlsx'}));
+for(let n=7;n<=12;n++)zip.addFile(`audio/${n}.wav`,tone);
+zip.addFile('HUONG_DAN.txt',Buffer.from('PART 2 - Dùng nút Nhập nhanh Part 2.\nExcel: sheet questions, cột question_number, correct_answer (A/B/C), explanation (tùy chọn).\nAudio đặt tên theo số câu: 7.mp3, 8.mp3... Không cần ảnh.\nAudio mẫu chỉ là tiếng bíp: thay bằng audio thật.\nChọn ZIP hoặc Excel cùng audio, kiểm tra rồi bấm Nhập.\n'));
+zip.writeZip(path.join(root,'toeic_listening_part2_quick.zip'));

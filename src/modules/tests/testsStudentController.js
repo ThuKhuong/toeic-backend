@@ -1,4 +1,8 @@
 const TestsService = require("./testsService");
+async function prediction(attemptId,userId) {
+  try { const result=await require('../ai/attemptPrediction').predictAttempt(attemptId,userId); const {token,...safe}=result;return safe; }
+  catch { return {status:'failed',parts:[],message:'Bài làm đã được lưu. Chưa lấy được dự đoán AI; hãy thử lại.'}; }
+}
 
 exports.getAllTests = async (req, res) => {
   try {
@@ -73,6 +77,7 @@ exports.submitAnswer = async (req, res) => {
 exports.finishAttempt = async (req, res) => {
   try {
     const result = await TestsService.finishAttempt(req.params.attempt_id, req.user.user_id);
+    result.ai_prediction = await prediction(req.params.attempt_id, req.user.user_id);
     res.json(result);
   } catch (err) {
     res.status(err.status || 500).json({ error: err.status ? err.message : "Server error" });
@@ -82,6 +87,8 @@ exports.finishAttempt = async (req, res) => {
 exports.getResults = async (req, res) => {
   try {
     const result = await TestsService.getAttemptResults(req.params.attempt_id, req.user.user_id);
+    // Only return the stored forecast. GET never triggers inference or persistence.
+    result.ai_prediction = result.attempt?.ai_prediction || null;
     res.json(result);
   } catch (err) {
     res.status(err.status || 500).json({ error: err.status ? err.message : "Server error" });

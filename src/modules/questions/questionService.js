@@ -1,3 +1,4 @@
+const { assertTestsEditable, assertQuestionsEditable, assertPassageEditable, assertQuestionsDeletable } = require('../tests/contentGuard');
 const QuestionModel = require("./questionModel");
 const pool = require("../../../db");
 
@@ -19,6 +20,11 @@ async function getQuestionById(id, includeCorrect = true) {
   const base = await QuestionModel.getQuestionById(id);
   if (base.rows.length === 0) return null;
   const question = base.rows[0];
+  if (!includeCorrect) {
+    delete question.correct_answer; delete question.explanation;
+    delete question.passage_translation; delete question.passage_explanation;
+    if (question.passages) question.passages = question.passages.map(({translation, explanation, ...passage}) => passage);
+  }
   const choices = await QuestionModel.getAnswerChoices(id, includeCorrect);
   return { ...question, choices: choices.rows };
 }
@@ -26,7 +32,8 @@ async function getQuestionById(id, includeCorrect = true) {
 async function getQuestionsForStudent(filters = {}) {
   const rows = await getQuestions(filters);
   return rows.map((q) => {
-    const { correct_answer, explanation, ...rest } = q;
+    const { correct_answer, explanation, passage_translation, passage_explanation, ...rest } = q;
+    if (rest.passages) rest.passages = rest.passages.map(({translation, explanation, ...passage}) => passage);
     return rest;
   });
 }
@@ -41,7 +48,8 @@ async function getRandomQuestions(count = 10, filters = {}) {
   `;
   const result = await pool.query(sql, [...params, Number(count)]);
   return result.rows.map((q) => {
-    const { correct_answer, explanation, ...rest } = q;
+    const { correct_answer, explanation, passage_translation, passage_explanation, ...rest } = q;
+    if (rest.passages) rest.passages = rest.passages.map(({translation, explanation, ...passage}) => passage);
     return rest;
   });
 }
@@ -63,6 +71,8 @@ async function createQuestion(payload) {
       choices = [],
       explanation = null,
     } = payload;
+
+    await assertTestsEditable(client, [test_id]);
 
     if (part_number === 5) {
       const qRes = await client.query(
@@ -158,6 +168,9 @@ async function updateQuestion(id, payload, transactionClient = null) {
     if (!transactionClient) {
       await client.query("BEGIN");
     }
+
+    await assertQuestionsEditable(client, [Number(id)]);
+    await assertTestsEditable(client, [payload.test_id]);
 
     // Kiểm tra xem câu hỏi có nằm trong bài thi không (chỉ khi không trong transaction)
     if (!transactionClient) {
@@ -280,23 +293,7 @@ async function deleteQuestion(id) {
       await client.query("ROLLBACK");
       return null;
     }
-    // Kiem tra xem cau hoi co nam trong bai thi nao khong
-    const testId = qRes.rows[0].test_id;
-    if (testId) {
-      await client.query("ROLLBACK");
-      throw new Error("Không thể xóa: câu hỏi đã nằm trong bài thi");
-    }
-
-    const uaRes = await client.query(
-      `SELECT COUNT(*) AS cnt FROM user_answers WHERE question_id=$1`,
-      [id]
-    );
-    const answeredCount = parseInt(uaRes.rows[0].cnt);
-    // Kiem tra xem cau hoi co duoc ai lam khong
-    if (answeredCount > 0) {
-      await client.query("ROLLBACK");
-      throw new Error("Không thể xóa: đã có người làm câu hỏi này");
-    }
+    await assertQuestionsDeletable(client, qRes.rows);
 
     // 3) Safe delete: remove choices then question
     await client.query(`DELETE FROM answer_choices WHERE question_id=$1`, [id]);
@@ -320,7 +317,7 @@ async function deletePassageGroup(passageId) {
     await client.query('BEGIN');
     const questions = (await client.query('SELECT question_id,group_id,test_id FROM questions WHERE passage_id=$1 FOR UPDATE', [passageId])).rows;
     if (!questions.length) throw new Error('Không tìm thấy nhóm câu hỏi.');
-    if (questions.some(q => q.test_id)) throw new Error('Không thể xóa nhóm đang thuộc đề thi.');
+    await assertQuestionsDeletable(client, questions);
     const ids = questions.map(q=>q.question_id);
     if ((await client.query('SELECT 1 FROM attempt_questions WHERE question_id=ANY($1::integer[]) LIMIT 1',[ids])).rowCount) throw new Error('Không thể xóa câu hỏi đã có lượt làm bài.');
     const groups = [...new Set(questions.map(q=>q.group_id).filter(Boolean))];
@@ -338,6 +335,7 @@ async function updatePassageGroup(passageId, payload) {
   try {
     await client.query("BEGIN");
 
+    await assertPassageEditable(client, passageId);
     const { title, content, difficulty_level, questions } = payload;
 
     // 1. Update passage

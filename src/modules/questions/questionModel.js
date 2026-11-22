@@ -34,10 +34,23 @@ exports.buildWhereClause = (filters) => {
 
   if (search) {
     i++;
-    conditions.push(`q.question_text ILIKE $${i}`);
+    if(Number(part_number) === 6) {
+      conditions.push(`(q.source_set ILIKE $${i} OR EXISTS (
+        SELECT 1 FROM reading_passages rp WHERE rp.passage_id=q.passage_id
+        AND (rp.title ILIKE $${i} OR rp.content ILIKE $${i})
+      ) OR EXISTS (
+        SELECT 1 FROM questions sibling WHERE
+        ((q.group_id IS NOT NULL AND sibling.group_id=q.group_id) OR (q.passage_id IS NOT NULL AND sibling.passage_id=q.passage_id))
+        AND (sibling.question_text ILIKE $${i} OR sibling.source_question_number::text ILIKE $${i})
+      ))`);
+    } else conditions.push(`q.question_text ILIKE $${i}`);
     params.push(`%${search}%`);
   }
 
+  if(filters.source_set) {
+    if(filters.source_set === '__unassigned__') conditions.push('q.source_set IS NULL');
+    else { conditions.push(`lower(q.source_set)=lower($${++i})`); params.push(filters.source_set); }
+  }
   const whereClause = conditions.length
     ? `WHERE ${conditions.join(" AND ")}`
     : "";
@@ -51,9 +64,9 @@ exports.countQuestions = (whereClause, params) =>
 exports.getQuestions = (whereClause, params, limit, offset) =>
   pool.query(
     `
-      SELECT q.*, COALESCE((SELECT jsonb_agg(jsonb_build_object('passage_id',p.passage_id,'title',p.title,'content',p.content,'image_url',p.image_url,'position',gp.position) ORDER BY gp.position) FROM question_group_passages gp JOIN reading_passages p USING(passage_id) WHERE gp.group_id=q.group_id),'[]'::jsonb) AS passages, 
+      SELECT q.*, COALESCE((SELECT jsonb_agg(jsonb_build_object('passage_id',p.passage_id,'title',p.title,'content',p.content,'image_url',p.image_url,'translation',to_jsonb(p)->>'translation','explanation',to_jsonb(p)->>'explanation','position',gp.position) ORDER BY gp.position) FROM question_group_passages gp JOIN reading_passages p USING(passage_id) WHERE gp.group_id=q.group_id),'[]'::jsonb) AS passages, 
              t.test_name,
-             rp.title as passage_title, rp.content as passage_content, rp.image_url as passage_image_url,
+             rp.title as passage_title, rp.content as passage_content, to_jsonb(rp)->>'translation' as passage_translation, to_jsonb(rp)->>'explanation' as passage_explanation, rp.image_url as passage_image_url,
              lm.title as material_title, lm.audio_url as material_audio,
              v.word as vocab_word, v.meaning_vi as vocab_meaning,
              v.topic_id as vocab_topic_id, vt.name as vocab_topic_name
@@ -91,9 +104,9 @@ exports.getAnswerChoices = (question_id, includeCorrect = false) => {
 exports.getQuestionById = (id) =>
   pool.query(
     `
-      SELECT q.*, COALESCE((SELECT jsonb_agg(jsonb_build_object('passage_id',p.passage_id,'title',p.title,'content',p.content,'image_url',p.image_url,'position',gp.position) ORDER BY gp.position) FROM question_group_passages gp JOIN reading_passages p USING(passage_id) WHERE gp.group_id=q.group_id),'[]'::jsonb) AS passages, 
+      SELECT q.*, COALESCE((SELECT jsonb_agg(jsonb_build_object('passage_id',p.passage_id,'title',p.title,'content',p.content,'image_url',p.image_url,'translation',to_jsonb(p)->>'translation','explanation',to_jsonb(p)->>'explanation','position',gp.position) ORDER BY gp.position) FROM question_group_passages gp JOIN reading_passages p USING(passage_id) WHERE gp.group_id=q.group_id),'[]'::jsonb) AS passages, 
              t.test_name,
-             rp.title as passage_title, rp.content as passage_content, rp.image_url as passage_image_url,
+             rp.title as passage_title, rp.content as passage_content, to_jsonb(rp)->>'translation' as passage_translation, to_jsonb(rp)->>'explanation' as passage_explanation, rp.image_url as passage_image_url,
              lm.title as material_title, lm.audio_url as material_audio,
              lm.transcript as material_transcript,
              v.word as vocab_word, v.meaning_vi as vocab_meaning,

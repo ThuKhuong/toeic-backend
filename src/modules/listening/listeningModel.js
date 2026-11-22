@@ -115,7 +115,7 @@ class ListeningModel {
     return result.rows[0];
   }
 
-  static async updateListeningMaterial(id, material) {
+  static async updateListeningMaterial(id, material, client = pool) {
     const fields = [];
     const values = [];
     let paramCount = 1;
@@ -144,10 +144,10 @@ class ListeningModel {
     }
 
     values.push(id);
-    const result = await pool.query(
+    const result = await client.query(
       `UPDATE listening_materials SET ${fields.join(
         ", "
-      )}, updated_at = CURRENT_TIMESTAMP
+      )}
        WHERE material_id = $${paramCount} RETURNING *`,
       values
     );
@@ -207,6 +207,11 @@ class ListeningModel {
     let whereClause = "WHERE q.part_number = $1 AND q.material_id IS NOT NULL";
     const params = [part];
     let paramCount = 2;
+    if (filters.source_set) {
+      whereClause += filters.source_set === '__unassigned__' ? ' AND q.source_set IS NULL' : ` AND lower(q.source_set) = lower($${paramCount++})`;
+      if(filters.source_set !== '__unassigned__') params.push(filters.source_set);
+    }
+
 
     if (difficulty_level) {
       whereClause += ` AND q.difficulty_level = $${paramCount}`;

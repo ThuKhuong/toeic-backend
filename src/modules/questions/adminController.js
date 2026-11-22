@@ -12,6 +12,7 @@ exports.getQuestions = async (req, res) => {
     const data = await QuestionService.getQuestions(req.query);
     res.json(data);
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error(e);
     res.status(500).json({ error: "Failed to fetch questions" });
   }
@@ -24,6 +25,7 @@ exports.getQuestionById = async (req, res) => {
     if (!data) return res.status(404).json({ error: "Question not found" });
     res.json(data);
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     res.status(500).json({ error: "Failed to fetch question" });
   }
 };
@@ -34,6 +36,7 @@ exports.createQuestion = async (req, res) => {
     const question = await QuestionService.createQuestion(req.body);
     res.status(201).json(question);
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error(e);
     res.status(500).json({ error: "Failed to create question" });
   }
@@ -50,6 +53,7 @@ exports.updateQuestion = async (req, res) => {
     if (!updated) return res.status(404).json({ error: "Question not found" });
     res.json(updated);
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("Error in updateQuestion controller:", e);
 
     // Kiểm tra nếu lỗi liên quan đến test_id
@@ -74,6 +78,7 @@ exports.deleteQuestion = async (req, res) => {
     if (!deleted) return res.status(404).json({ error: "Question not found" });
     res.json({ message: "Question deleted successfully" });
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     const msg = e.message || "Failed to delete question";
     if (msg.startsWith("Không thể xóa")) {
       return res.status(400).json({ error: msg });
@@ -87,6 +92,7 @@ exports.getStatistics = async (req, res) => {
     const stats = await QuestionService.getStatistics();
     res.json(stats);
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     res.status(500).json({ error: "Failed to fetch statistics" });
   }
 };
@@ -106,6 +112,7 @@ exports.deletePassageGroup = async (req, res) => {
       deleted_questions: result.deleted_questions,
     });
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("Delete passage group error:", e);
     const errorMessage = e.message || "Failed to delete passage group";
     // Nếu là lỗi do đã được người dùng làm bài, trả về 400
@@ -131,6 +138,7 @@ exports.updatePassageGroup = async (req, res) => {
     );
     res.json(result);
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error(e);
     res.status(500).json({ error: "Failed to update passage group" });
   }

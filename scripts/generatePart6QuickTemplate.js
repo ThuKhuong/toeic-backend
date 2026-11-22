@@ -1,0 +1,13 @@
+const path=require('node:path');const Zip=require('adm-zip');const X=require('xlsx');
+const root=path.resolve(__dirname,'../../toeic_admin_vite/public/templates');
+const original=new Zip(path.join(root,'toeic_part6_sample.zip'));
+const image=original.getEntries().find(e=>/\.(png|jpg|jpeg)$/i.test(e.entryName));
+if(!image)throw new Error('Sample image missing');
+const ext=path.extname(image.entryName);
+const data=Array.from({length:16},(_,i)=>({question_number:131+i,A:i===0?'secure':'[MẪU] Thay lựa chọn A',B:i===0?'security':'[MẪU] Thay lựa chọn B',C:i===0?'securely':'[MẪU] Thay lựa chọn C',D:i===0?'securing':'[MẪU] Thay lựa chọn D',correct_answer:'B',explanation:i===0?'Chỗ trống cần danh từ: security guard (nhân viên an ninh).':'Thay bằng bản dịch và lời giải thật (có thể để trống).'}));
+const wb=X.utils.book_new();const sheet=X.utils.json_to_sheet(data);sheet['!cols']=[{wch:20},...Array.from({length:4},()=>({wch:35})),{wch:20},{wch:90}];sheet['!autofilter']={ref:sheet['!ref']};X.utils.book_append_sheet(wb,sheet,'questions');
+require('node:fs').writeFileSync(path.join(root,'toeic_reading_part6_quick.xlsx'),X.write(wb,{type:'buffer',bookType:'xlsx'}));
+const zip=new Zip();zip.addFile('questions.xlsx',X.write(wb,{type:'buffer',bookType:'xlsx'}));
+for(const start of [131,135,139,143])zip.addFile(`${start}-${start+3}${ext}`,image.getData());
+zip.addFile('HUONG_DAN.txt',Buffer.from('PART 6 - Dùng nút Nhập câu hỏi Part 6.\nChỉ cần sheet questions: question_number, A, B, C, D, correct_answer, explanation (tùy chọn).\nKhông cần question_text, passage_key, group_key, sheet passages.\nMỗi ảnh ứng với 4 câu: 131-134.png, 135-138.png, 139-142.png, 143-146.png (cũng nhận JPG).\nTHAY TOÀN BỘ ẢNH MẪU VÀ DỮ LIỆU MẪU BẰNG ĐỀ THẬT. Ảnh mẫu có thể không khớp lựa chọn mẫu.\nNếu không dùng ảnh, thêm cột passage_text và dán đoạn văn ở một dòng của nhóm 4 câu.\nChọn bộ đề nguồn một lần trên web. Chọn Excel + ảnh hoặc một ZIP; kiểm tra rồi nhập.\nCó thể nhập từng đoạn 4 câu hoặc cả 16 câu. Không gộp lời giải của nhiều câu vào cùng ô.\n'));
+zip.writeZip(path.join(root,'toeic_reading_part6_quick.zip'));console.log('Generated Part 6 quick template');

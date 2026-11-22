@@ -37,6 +37,13 @@ router.get(
   controller.getResults
 );
 
+router.post('/attempts/:attempt_id/ai-prediction',authMiddleware,async(req,res)=>{
+  try {
+    const result=await require('../ai/attemptPrediction').predictAttempt(req.params.attempt_id,req.user.user_id,{retry:true});
+    const {token,...safe}=result;res.json(safe);
+  } catch(e) {res.status(e.status || 503).json({error:e.status ? e.message : 'Chưa lấy được dự đoán AI. Kết quả bài làm vẫn được giữ nguyên.'});}
+});
+
 // Test detail (placed last to avoid swallowing /attempts/...)
 router.get("/:id", controller.getTest);
 

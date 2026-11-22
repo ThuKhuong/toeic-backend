@@ -82,10 +82,6 @@ async function main(){
     await request('/api/admin/questions/import-zip/part7',{archive:Buffer.from('not a zip'),status:422});
     const ambiguous=zip({'q.xlsx':workbook({questions:[listenRow]}),'a/picture.png':img,'b/picture.png':img,'audio.mp3':Buffer.from('ID3test')});
     await request('/api/admin/listening/questions/import-zip',{archive:ambiguous,status:422});
-    const vocabEndpoint='/api/admin/vocabulary/import';
-    await request(vocabEndpoint,{items:[{word:'invoice',meaning_vi:'hóa đơn',part_of_speech:'noun',topic_id:1}]});
-    await request(vocabEndpoint,{items:[{word:'missing',meaning_vi:'',_source:{row:6}}],status:422});
-    await request(vocabEndpoint,{items:[{word:'bad topic',meaning_vi:'test',topic_id:2147483647}],status:422});
     const n=(await pool.query('SELECT COUNT(*)::integer AS n FROM questions')).rows[0].n;
     const sqlFail=[{...q5,question_text:'Rollback this'},...reading(7,'db-fail',2,{passage:{title:'x'.repeat(501),content:'Too long title'}})];
     await request(endpoint,{items:sqlFail,status:422});
@@ -95,7 +91,7 @@ async function main(){
     await require('../src/modules/questions/questionService').deletePassageGroup(multi.items[0].passage_id);
     assert.equal((await pool.query('SELECT COUNT(*)::integer AS n FROM question_group_passages WHERE group_id=$1',[multi.items[0].group_id])).rows[0].n,0);
     assert.deepEqual(fs.readdirSync(uploadPaths.stagingDir).sort(),beforeStage);
-    console.log('PASS: Parts 1–7, exact choices, atomic groups/batches, workbook keys, multi-passages, explanations, duplicate/concurrent requests, media serving, missing/ambiguous media, bad archives, row errors, vocabulary topics, SQL rollback, group deletion, auth, staging cleanup.');
+    console.log('PASS: Parts 1–7, exact choices, atomic groups/batches, workbook keys, multi-passages, explanations, duplicate/concurrent requests, media serving, missing/ambiguous media, bad archives, row errors, SQL rollback, group deletion, auth, staging cleanup.');
   }finally{
     if(server)await new Promise(resolve=>server.close(resolve));
     // Only directories referenced by this isolated test's own imported questions are removed.

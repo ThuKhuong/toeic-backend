@@ -1,5 +1,7 @@
+const { assertTestsEditable, assertQuestionsEditable, withContentTransaction } = require('./contentGuard');
 const TestsModel = require("./testsModel");
 const pool = require("../../../db");
+const {assertUniqueTestName} = require('./testNameGuard');
 const { startAttempt, submitAnswer, finishAttempt, getAttemptResults } = require("./attemptService");
 
 // Called only by the authenticated admin route; student access still requires ownership.
@@ -42,6 +44,9 @@ async function getFullTestForStudent(test_id, includeAnswers = false) {
         delete questionData.correct_answer;
         delete questionData.explanation;
         delete questionData.material_transcript;
+        delete questionData.passage_translation;
+        delete questionData.passage_explanation;
+        questionData.passages = (questionData.passages || []).map(({translation, explanation, ...passage}) => passage);
       }
 
       return questionData;
@@ -80,13 +85,17 @@ async function adminGetTestDetails(id) {
 }
 
 async function adminCreateTest(data) {
-  return await TestsModel.createTest(data);
+  return withContentTransaction(async client => {
+    const test_name = await assertUniqueTestName(client, data.test_name);
+    return TestsModel.createTest({...data, test_name}, client);
+  });
 }
 
 async function adminCreateTestWithQuestions(data) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    data = {...data, test_name: await assertUniqueTestName(client, data.test_name)};
     const {
       test_name,
       test_type,
@@ -111,156 +120,20 @@ async function adminCreateTestWithQuestions(data) {
       parts,
       created_by,
       is_active,
-    });
+      publication_status,
+    }, client);
 
-    const count = Math.max(0, Number(total_questions) || 0);
+    const count = Number(total_questions);
+    if(!Number.isInteger(count) || count<1 || count>200) throw Object.assign(new Error('Số câu phải từ 1 đến 200.'),{status:400});
     const pn = Number(part_number) || 5;
 
     let selectedIds = [];
     if (count > 0) {
-      const params = [pn];
+      selectedIds = await require('./questionSelection').selectQuestions(client, {
+        part_number: pn, total_questions: count, source_set: data.source_set, selection_mode: data.selection_mode, question_ids: data.question_ids,
+      });
 
-      // Part 1: 1 audio = 6 câu hỏi (chọn tất cả 6 câu cùng material_id)
-      // Part 2: 1 audio = 25 câu hỏi (chọn tất cả 25 câu cùng material_id)
-      let sql;
-      if (pn === 1) {
-        // Part 1: Tìm material_id đầu tiên có đủ 6 câu hỏi, lấy TẤT CẢ 6 câu
-        // Chỉ lấy listening questions (question_type = 'listening' hoặc NULL với material_id)
-        let whereClause = `WHERE part_number=$1 AND material_id IS NOT NULL 
-          AND (
-            question_type = 'listening' 
-            OR (question_type IS NULL AND material_id IS NOT NULL)
-          )`;
-        
-
-        if (!reuse_assigned) {
-          whereClause += " AND test_id IS NULL";
-        }
-        
-
-        let whereClause2 = `WHERE q.part_number=$1 
-          AND (
-            q.question_type = 'listening' 
-            OR (q.question_type IS NULL AND q.material_id IS NOT NULL)
-          )`;
-        if (!reuse_assigned) {
-          whereClause2 += " AND q.test_id IS NULL";
-        }
-        
-
-        sql = `
-          WITH selected_material AS (
-            SELECT material_id
-            FROM questions
-            ${whereClause}
-            GROUP BY material_id
-            HAVING COUNT(*) >= 6
-            ORDER BY material_id ASC
-            LIMIT 1
-          )
-          SELECT q.question_id
-          FROM questions q
-          INNER JOIN selected_material sm ON q.material_id = sm.material_id
-          ${whereClause2}
-          ORDER BY q.question_id ASC
-          LIMIT 6
-        `;
-        
-      } else if (pn === 2) {
-        // Part 2: Tìm material_id đầu tiên có đủ 25 câu hỏi, lấy TẤT CẢ 25 câu
-        // Chỉ lấy listening questions (question_type = 'listening' hoặc NULL với material_id)
-        let whereClause = `WHERE part_number=$1 AND material_id IS NOT NULL 
-          AND (
-            question_type = 'listening' 
-            OR (question_type IS NULL AND material_id IS NOT NULL)
-          )`;
-        
-
-        if (!reuse_assigned) {
-          whereClause += " AND test_id IS NULL"; // chỉ chọn câu hỏi chưa được gán vào bài thi
-        }
-        
-
-        let whereClause2 = `WHERE q.part_number=$1 
-          AND (
-            q.question_type = 'listening' 
-            OR (q.question_type IS NULL AND q.material_id IS NOT NULL)
-          )`;
-        if (!reuse_assigned) {
-          whereClause2 += " AND q.test_id IS NULL";
-        }
-        
-
-        sql = `
-          WITH selected_material AS (
-            SELECT material_id
-            FROM questions
-            ${whereClause}
-            GROUP BY material_id
-            HAVING COUNT(*) >= 25
-            ORDER BY material_id ASC
-            LIMIT 1
-          )
-          SELECT q.question_id
-          FROM questions q
-          INNER JOIN selected_material sm ON q.material_id = sm.material_id
-          ${whereClause2}
-          ORDER BY q.question_id ASC
-          LIMIT 25
-        `;
-        
-      } else {
-        // Part 3, 4, 5, 6, 7: Chọn theo thứ tự import (question_id ASC) để giữ thứ tự như khi nhập
-        // Phân biệt listening (Part 3, 4) và reading (Part 5, 6, 7)
-        if (pn >= 3 && pn <= 4) {
-          // Part 3, 4: Chỉ lấy listening questions
-          sql = `SELECT question_id FROM questions 
-            WHERE part_number=$1 
-            AND (
-              question_type = 'listening' 
-              OR (question_type IS NULL AND material_id IS NOT NULL)
-            )`;
-        } else if (pn >= 5 && pn <= 7) {
-          // Part 5, 6, 7: Chỉ lấy reading questions
-          sql = `SELECT question_id FROM questions 
-            WHERE part_number=$1 
-            AND (
-              question_type = 'reading' 
-              OR (question_type IS NULL AND passage_id IS NOT NULL)
-            )`;
-        } else {
-          // Fallback: không filter theo question_type
-          sql = `SELECT question_id FROM questions WHERE part_number=$1`;
-        }
-
-        if (!reuse_assigned) sql += ` AND test_id IS NULL`;
-        
-        params.push(count);
-        sql += ` ORDER BY question_id ASC LIMIT $${params.length}`;
-      }
-
-      const r = await client.query(sql, params);
-      selectedIds = r.rows.map((x) => x.question_id);
-
-      // Kiểm tra và thông báo nếu không tìm thấy câu hỏi phù hợp
-      if (selectedIds.length === 0) {
-        let errorMsg = "";
-        if (pn === 1) {
-          errorMsg = `Không tìm thấy material_id nào có đủ 6 câu hỏi Part 1 chưa được gán`;
-          
-          errorMsg += `. Vui lòng kiểm tra lại dữ liệu hoặc bật "Cho phép tái sử dụng câu hỏi đã gán".`;
-        } else if (pn === 2) {
-          errorMsg = `Không tìm thấy material_id nào có đủ 25 câu hỏi Part 2 chưa được gán`;
-          
-          errorMsg += `. Vui lòng kiểm tra lại dữ liệu hoặc bật "Cho phép tái sử dụng câu hỏi đã gán".`;
-        } else {
-          errorMsg = `Không tìm thấy ${count} câu hỏi Part ${pn} chưa được gán`;
-          
-          errorMsg += `. Vui lòng kiểm tra lại dữ liệu.`;
-        }
-        // Không throw error, chỉ trả về assigned: 0 để frontend xử lý
-      }
-
+      await assertQuestionsEditable(client, selectedIds);
       for (let i = 0; i < selectedIds.length; i++) {
         await client.query(
           `UPDATE questions SET test_id=$1, order_in_test=$2 WHERE question_id=$3`,
@@ -287,14 +160,7 @@ async function adminCreateTestWithQuestions(data) {
       test: { ...newTest, total_questions: total },
       assigned,
       questions,
-      warning:
-        assigned === 0 && count > 0
-          ? pn === 1
-            ? "Không tìm thấy material_id nào có đủ 6 câu hỏi Part 1. Vui lòng kiểm tra lại dữ liệu."
-            : pn === 2
-            ? "Không tìm thấy material_id nào có đủ 25 câu hỏi Part 2. Vui lòng kiểm tra lại dữ liệu."
-            : `Không tìm thấy đủ ${count} câu hỏi Part ${pn}. Vui lòng kiểm tra lại dữ liệu.`
-          : null,
+      warning: null,
     };
   } catch (e) {
     await client.query("ROLLBACK");
@@ -310,10 +176,12 @@ async function adminAutoGenerateQuestions(data) {
     await client.query("BEGIN");
     const { test_id, part_number, total_questions, reuse_assigned } = data;
     const test = await TestsModel.getTestById(Number(test_id), { includeDrafts: true });
-    if (!test) throw new Error("TEST_NOT_FOUND");
+    if (!test) throw Object.assign(new Error("TEST_NOT_FOUND"), { status: 404 });
+    await assertTestsEditable(client, [test.test_id]);
 
     const pn = Number(part_number) || 5;
-    const count = Math.max(0, Number(total_questions) || 0);
+    const count = Number(total_questions);
+    if(!Number.isInteger(count) || count<1 || count>200) throw Object.assign(new Error('Số câu phải từ 1 đến 200.'),{status:400});
 
     const maxOrderRes = await client.query(
       `SELECT COALESCE(MAX(order_in_test),0) AS max_order FROM questions WHERE test_id=$1`,
@@ -324,149 +192,11 @@ async function adminAutoGenerateQuestions(data) {
     let selectedIds = [];
     if (count > 0) {
       const reuse = Boolean(reuse_assigned);
-      const params = [pn];
+      selectedIds = await require('./questionSelection').selectQuestions(client, {
+        part_number: pn, total_questions: count, source_set: data.source_set, selection_mode: data.selection_mode, question_ids: data.question_ids,
+      });
 
-      // Part 1: 1 audio = 6 câu hỏi (chọn tất cả 6 câu cùng material_id)
-      // Part 2: 1 audio = 25 câu hỏi (chọn tất cả 25 câu cùng material_id)
-      let sql;
-      if (pn === 1) {
-        // Part 1: Tìm material_id đầu tiên có đủ 6 câu hỏi, lấy TẤT CẢ 6 câu
-        // Chỉ lấy listening questions (question_type = 'listening' hoặc NULL với material_id)
-        let whereClause = `WHERE part_number=$1 AND material_id IS NOT NULL 
-          AND (
-            question_type = 'listening' 
-            OR (question_type IS NULL AND material_id IS NOT NULL)
-          )`;
-        
-
-        if (!reuse) {
-          whereClause += " AND test_id IS NULL";
-        }
-        
-
-        let whereClause2 = `WHERE q.part_number=$1 
-          AND (
-            q.question_type = 'listening' 
-            OR (q.question_type IS NULL AND q.material_id IS NOT NULL)
-          )`;
-        if (!reuse) {
-          whereClause2 += " AND q.test_id IS NULL";
-        }
-        
-
-        sql = `
-          WITH selected_material AS (
-            SELECT material_id
-            FROM questions
-            ${whereClause}
-            GROUP BY material_id
-            HAVING COUNT(*) >= 6
-            ORDER BY material_id ASC
-            LIMIT 1
-          )
-          SELECT q.question_id
-          FROM questions q
-          INNER JOIN selected_material sm ON q.material_id = sm.material_id
-          ${whereClause2}
-          ORDER BY q.question_id ASC
-          LIMIT 6
-        `;
-        
-      } else if (pn === 2) {
-        // Part 2: Tìm material_id đầu tiên có đủ 25 câu hỏi, lấy TẤT CẢ 25 câu
-        // Chỉ lấy listening questions (question_type = 'listening' hoặc NULL với material_id)
-        let whereClause = `WHERE part_number=$1 AND material_id IS NOT NULL 
-          AND (
-            question_type = 'listening' 
-            OR (question_type IS NULL AND material_id IS NOT NULL)
-          )`;
-        
-
-        if (!reuse) {
-          whereClause += " AND test_id IS NULL";
-        }
-        
-
-        let whereClause2 = `WHERE q.part_number=$1 
-          AND (
-            q.question_type = 'listening' 
-            OR (q.question_type IS NULL AND q.material_id IS NOT NULL)
-          )`;
-        if (!reuse) {
-          whereClause2 += " AND q.test_id IS NULL";
-        }
-        
-
-        sql = `
-          WITH selected_material AS (
-            SELECT material_id
-            FROM questions
-            ${whereClause}
-            GROUP BY material_id
-            HAVING COUNT(*) >= 25
-            ORDER BY material_id ASC
-            LIMIT 1
-          )
-          SELECT q.question_id
-          FROM questions q
-          INNER JOIN selected_material sm ON q.material_id = sm.material_id
-          ${whereClause2}
-          ORDER BY q.question_id ASC
-          LIMIT 25
-        `;
-        
-      } else {
-        // Part 3, 4, 5, 6, 7: Chọn theo thứ tự import (question_id ASC) để giữ thứ tự như khi nhập
-        // Phân biệt listening (Part 3, 4) và reading (Part 5, 6, 7)
-        if (pn >= 3 && pn <= 4) {
-          // Part 3, 4: Chỉ lấy listening questions
-          sql = `SELECT question_id FROM questions 
-            WHERE part_number=$1 
-            AND (
-              question_type = 'listening' 
-              OR (question_type IS NULL AND material_id IS NOT NULL)
-            )`;
-        } else if (pn >= 5 && pn <= 7) {
-          // Part 5, 6, 7: Chỉ lấy reading questions
-          sql = `SELECT question_id FROM questions 
-            WHERE part_number=$1 
-            AND (
-              question_type = 'reading' 
-              OR (question_type IS NULL AND passage_id IS NOT NULL)
-            )`;
-        } else {
-          // Fallback: không filter theo question_type
-          sql = `SELECT question_id FROM questions WHERE part_number=$1`;
-        }
-
-        if (!reuse) sql += ` AND test_id IS NULL`;
-        
-        params.push(count);
-        sql += ` ORDER BY question_id ASC LIMIT $${params.length}`;
-      }
-
-      const r = await client.query(sql, params);
-      selectedIds = r.rows.map((x) => x.question_id);
-
-      // Kiểm tra và thông báo nếu không tìm thấy câu hỏi phù hợp
-      if (selectedIds.length === 0) {
-        let errorMsg = "";
-        if (pn === 1) {
-          errorMsg = `Không tìm thấy material_id nào có đủ 6 câu hỏi Part 1 chưa được gán`;
-          
-          errorMsg += `. Vui lòng kiểm tra lại dữ liệu hoặc bật "Cho phép tái sử dụng câu hỏi đã gán".`;
-        } else if (pn === 2) {
-          errorMsg = `Không tìm thấy material_id nào có đủ 25 câu hỏi Part 2 chưa được gán`;
-          
-          errorMsg += `. Vui lòng kiểm tra lại dữ liệu hoặc bật "Cho phép tái sử dụng câu hỏi đã gán".`;
-        } else {
-          errorMsg = `Không tìm thấy ${count} câu hỏi Part ${pn} chưa được gán`;
-          
-          errorMsg += `. Vui lòng kiểm tra lại dữ liệu.`;
-        }
-        // Không throw error, chỉ trả về assigned: 0 để frontend xử lý
-      }
-
+      await assertQuestionsEditable(client, selectedIds);
       for (let i = 0; i < selectedIds.length; i++) {
         await client.query(
           `UPDATE questions SET test_id=$1, order_in_test=$2 WHERE question_id=$3`,
@@ -511,90 +241,37 @@ async function adminAutoGenerateQuestions(data) {
 }
 
 async function adminUpdateTest(id, data) {
+  if (!await TestsModel.getTestById(id, { includeDrafts: true })) return null;
   if (Object.keys(data).length === 1 && data.publication_status !== undefined) {
     if (!['draft','published','unpublished'].includes(data.publication_status)) throw Object.assign(new Error('Trạng thái không hợp lệ'),{status:400});
-    const result=await pool.query('UPDATE tests SET publication_status=$2, updated_at=CURRENT_TIMESTAMP WHERE test_id=$1 RETURNING *',[id,data.publication_status]);
+    const result=await pool.query('UPDATE tests SET publication_status=$2, updated_at=CURRENT_TIMESTAMP WHERE test_id=$1 AND deleted_at IS NULL RETURNING *',[id,data.publication_status]);
     return result.rows[0];
   }
-  // Ràng buộc: Không cho sửa nếu đã có người làm bài
-  // Kiểm tra xem có người đã làm bài test này chưa
-  const attemptsCheck = await pool.query(
-    `SELECT COUNT(*) as count FROM user_test_attempts WHERE test_id=$1`,
-    [id]
-  );
-  const attemptsCount = parseInt(attemptsCheck.rows[0].count || 0);
-
-  if (attemptsCount > 0) {
-    const testCheck = await pool.query(
-      `SELECT test_name FROM tests WHERE test_id=$1`,
-      [id]
-    );
-    const testName = testCheck.rows[0]?.test_name || "N/A";
-    throw new Error(
-      `Không thể sửa bài test "${testName}" (ID: ${id}): Đã có ${attemptsCount} lượt làm bài. Bạn có thể ngừng xuất bản đề hoặc tạo đề mới.`
-    );
-  }
-
-  return await TestsModel.updateTest(id, data);
+  return withContentTransaction(async client => {
+    if (data.test_name !== undefined) data = {...data, test_name: await assertUniqueTestName(client, data.test_name, id)};
+    await assertTestsEditable(client, [id]);
+    return TestsModel.updateTest(id, data, client);
+  });
 }
 
 async function adminDeleteTest(id) {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-
-    // Check if test exists
-    const testCheck = await client.query(
-      `SELECT test_id, test_name FROM tests WHERE test_id=$1 FOR UPDATE`,
-      [id]
-    );
-    if (testCheck.rows.length === 0) {
-      await client.query("ROLLBACK");
-      return null;
-    }
-
-    const test = testCheck.rows[0];
-
-    const used=await client.query('SELECT 1 FROM user_test_attempts WHERE test_id=$1 LIMIT 1',[id]);
-    if(used.rows.length) throw Object.assign(new Error('Đề đã có lượt làm bài. Hãy ngừng xuất bản thay vì xóa.'),{status:409});
-
-    // 3. Gỡ câu hỏi khỏi bài thi (giữ lại câu hỏi để sử dụng lại)
-    const unlinkQuestions = await client.query(
-      `UPDATE questions SET test_id=NULL, order_in_test=NULL WHERE test_id=$1`,
-      [id]
-    );
-
-    // 4. Xóa bài thi
-    const deleteTest = await client.query(
-      `DELETE FROM tests WHERE test_id=$1 RETURNING *`,
-      [id]
-    );
-    await client.query("COMMIT");
-    return deleteTest.rows[0];
-  } catch (e) {
-    await client.query("ROLLBACK");
-    console.error(" Error deleting test:", e);
-    throw e;
-  } finally {
-    client.release();
-  }
+  // Preserve the test, its questions and all attempts for history and review.
+  return TestsModel.softDeleteTest(id);
 }
 
 async function adminGetStatistics(id) {
   return await TestsModel.getTestStatistics(id);
 }
 
-async function adminGetAvailability({ part_number }) {
-  const pn = Number(part_number);
-  const params = [pn];
-  let sql = `SELECT COUNT(*)::int AS available FROM questions WHERE test_id IS NULL AND part_number=$1`;
-  
-  const r = await pool.query(sql, params);
-  return { available: r.rows[0]?.available ?? 0 };
+async function adminGetAvailability(options) {
+  const {where,params} = require('./questionSelection').eligibility(options);
+  const result = await pool.query(`SELECT COUNT(*)::int AS available FROM questions q WHERE ${where}`,params);
+  return {available:result.rows[0]?.available || 0};
 }
 
 // Lấy danh sách câu hỏi chưa gán theo part và difficulty
 async function adminGetUnassignedQuestions({
+  source_set,
   part_number,
   difficulty_level,
   page = 1,
@@ -614,33 +291,15 @@ async function adminGetUnassignedQuestions({
       };
     }
 
-    const params = [pn];
-    // Filter: test_id IS NULL, part_number = $1
-    // Với Part 1-4 (listening), chỉ lấy câu hỏi có question_type = 'listening' hoặc NULL (câu hỏi cũ)
-    // và phải có material_id (đảm bảo là listening question)
-    let whereClause = "WHERE q.test_id IS NULL AND q.part_number = $1";
-
-    // Với Part 1-4, chỉ lấy listening questions
-    if (pn >= 1 && pn <= 4) {
-      whereClause += ` AND (
-        q.question_type = 'listening' 
-        OR (q.question_type IS NULL AND q.material_id IS NOT NULL)
-      )`;
-    } else {
-      // Với Part 5-7 (reading), chỉ lấy reading questions
-      whereClause += ` AND (
-        q.question_type = 'reading' 
-        OR (q.question_type IS NULL AND q.passage_id IS NOT NULL)
-      )`;
-    }
-
-    
+    const {where, params} = require('./questionSelection').eligibility({part_number:pn,source_set});
+    const whereClause = `WHERE ${where}`;
 
     // Query để lấy câu hỏi với choices
     const sql = `
       SELECT 
         q.question_id,
         q.question_text,
+        q.source_set, q.source_question_number,
         q.part_number,
         q.difficulty_level,
         q.correct_answer,
@@ -657,7 +316,7 @@ async function adminGetUnassignedQuestions({
       LEFT JOIN answer_choices ac ON q.question_id = ac.question_id
       ${whereClause}
       GROUP BY q.question_id
-      ORDER BY q.question_id ASC
+      ORDER BY q.source_set NULLS LAST, COALESCE(q.source_question_number,q.order_in_test) NULLS LAST, q.question_id
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}
     `;
 
@@ -706,6 +365,8 @@ async function adminAssignQuestionsToTest({ test_id, question_ids }) {
       throw new Error("TEST_NOT_FOUND");
     }
 
+    await assertTestsEditable(client, [testId]);
+
     // Lấy thứ tự hiện tại trong test
     const maxOrderRes = await client.query(
       `SELECT COALESCE(MAX(order_in_test), 0) AS max_order FROM questions WHERE test_id = $1`,
@@ -734,6 +395,8 @@ async function adminAssignQuestionsToTest({ test_id, question_ids }) {
         assignedIds.push(q.question_id);
       }
     }
+
+    await assertQuestionsEditable(client, assignedIds);
 
     // Gán các câu hỏi hợp lệ
     for (let i = 0; i < assignedIds.length; i++) {
@@ -846,6 +509,7 @@ async function adminGetAllAttempts({
       uta.total_correct,
       uta.total_questions,
       uta.score,
+      CASE WHEN uta.is_completed THEN (uta.grading_result->'toeic'->>'total')::integer END AS toeic_estimated_total,
       uta.time_spent,
       uta.is_completed
     FROM user_test_attempts uta

@@ -7,9 +7,6 @@ exports.countStudents = () =>
     ["STUDENT"]
   );
 
-exports.countVocabulary = () =>
-  pool.query(`SELECT COUNT(*) as count FROM vocabulary`);
-
 exports.countTests = () =>
   pool.query(`SELECT COUNT(*) as count FROM tests WHERE is_active = true`);
 

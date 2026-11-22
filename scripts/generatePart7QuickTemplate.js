@@ -1,0 +1,14 @@
+const fs=require('node:fs'), path=require('node:path'), Zip=require('adm-zip'), X=require('xlsx');
+const root=path.resolve(__dirname,'../../toeic_admin_vite/public/templates');
+const sample=new Zip(path.join(root,'toeic_part7_sample.zip'));
+const image=sample.getEntries().find(e=>/\.(png|jpg|jpeg)$/i.test(e.entryName));
+const questions=[147,148,149,150].map((number,i)=>({question_number:number,question_text:`[MẪU] Thay câu hỏi ${number}`,A:'[MẪU] Lựa chọn A',B:'[MẪU] Lựa chọn B',C:'[MẪU] Lựa chọn C',D:'[MẪU] Lựa chọn D',correct_answer:i%2?'B':'A',explanation:'[MẪU] Dịch câu hỏi, dịch A–D và giải thích vì sao đáp án đúng.',passage_translation:i%2?'':'[MẪU] Dán bản dịch tiếng Việt của toàn bộ đoạn văn ở đây. Giữ xuống dòng để chia đoạn.',passage_explanation:i%2?'':'[MẪU] Ghi chú nội dung, từ vựng và dẫn chứng của đoạn văn (tùy chọn).'}));
+const wb=X.utils.book_new(), sheet=X.utils.json_to_sheet(questions);
+sheet['!cols']=Object.keys(questions[0]).map(key=>({wch:/explanation|translation|text/.test(key)?70:24}));
+sheet['!autofilter']={ref:sheet['!ref']};X.utils.book_append_sheet(wb,sheet,'questions');
+const buffer=X.write(wb,{type:'buffer',bookType:'xlsx'}), zip=new Zip();zip.addFile('questions.xlsx',buffer);
+for(const range of ['147-148','149-150'])zip.addFile(`${range}${path.extname(image.entryName)}`,image.getData());
+zip.addFile('HUONG_DAN.txt',Buffer.from('PART 7 - ẢNH ĐOẠN VĂN VÀ CÂU HỎI\nChọn Nhập câu hỏi Part 7, nhập bộ đề nguồn, kéo Excel + ảnh hoặc một ZIP.\nSheet questions: question_number, question_text, A, B, C, D, correct_answer, explanation.\nẢnh đặt tên khoảng câu: 147-148.png, 149-150.png; mỗi nhóm đủ 2–5 câu liên tiếp.\nNhóm nhiều đoạn văn có 5 câu: ảnh 176-180-1.png, 176-180-2.png (tối đa 3 ảnh). Không gửi thêm 176-180.png cùng nhóm này.\nexplanation: bản dịch câu hỏi/lựa chọn và lời giải riêng từng câu.\npassage_translation: bản dịch toàn bộ đoạn văn/nhóm đoạn văn, chỉ nhập một dòng trong nhóm.\npassage_explanation: giải thích đoạn văn/từ vựng/dẫn chứng, chỉ nhập một dòng trong nhóm (tùy chọn).\nKhi làm bài chỉ hiển thị ảnh và câu hỏi. Sau khi nộp mới hiển thị đáp án, lời giải, bản dịch và giải thích đoạn văn.\nTHAY TOÀN BỘ ẢNH VÀ NỘI DUNG MẪU BẰNG ĐỀ THẬT. Không cần nhập lại văn bản tiếng Anh khi đã dùng ảnh.\n','utf8'));
+fs.writeFileSync(path.join(root,'toeic_reading_part7_quick.xlsx'),buffer);
+zip.writeZip(path.join(root,'toeic_reading_part7_quick.zip'));
+console.log('Generated Part 7 image-based template.');

@@ -5,6 +5,7 @@ exports.getAll = async (req, res) => {
     const tests = await TestsService.adminListTests(req.query);
     res.json(tests);
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
     res.status(500).json({ error: "Server error" });
   }
 };
@@ -16,6 +17,7 @@ exports.getDetail = async (req, res) => {
 
     res.json(test);
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
     res.status(500).json({ error: "Server error" });
   }
 };
@@ -30,6 +32,7 @@ exports.create = async (req, res) => {
     const newTest = await TestsService.adminCreateTest(data);
     res.status(201).json(newTest);
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
     res.status(500).json({ error: "Server error" });
   }
 };
@@ -43,6 +46,7 @@ exports.createWithQuestions = async (req, res) => {
     const result = await TestsService.adminCreateTestWithQuestions(data);
     res.status(201).json(result);
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
     console.error("create-with-questions:", err);
     res.status(500).json({ error: "Server error" });
   }
@@ -53,6 +57,7 @@ exports.autoGenerateQuestions = async (req, res) => {
     const result = await TestsService.adminAutoGenerateQuestions(req.body);
     res.status(200).json(result);
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
     console.error("auto-generate:", err);
     res.status(500).json({ error: "Server error" });
   }
@@ -65,6 +70,7 @@ exports.update = async (req, res) => {
 
     res.json(updated);
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
     console.error("Error in update controller:", err);
 
     // Ràng buộc: Trả về lỗi nếu có người đã làm bài
@@ -97,6 +103,7 @@ exports.remove = async (req, res) => {
       },
     });
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
     console.error("Error in remove controller:", err);
 
     // Ràng buộc: Trả về lỗi nếu có người đã làm bài
@@ -118,19 +125,22 @@ exports.statistics = async (req, res) => {
     const stats = await TestsService.adminGetStatistics(req.params.id);
     res.json(stats);
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
     res.status(500).json({ error: "Server error" });
   }
 };
 
 exports.availability = async (req, res) => {
   try {
-    const { part_number, difficulty_level } = req.query;
+    const { part_number, difficulty_level, source_set } = req.query;
     const result = await TestsService.adminGetAvailability({
       part_number,
+      source_set,
       difficulty_level,
     });
     res.json(result);
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
     res.status(500).json({ error: "Server error" });
   }
 };
@@ -156,6 +166,7 @@ exports.getAllAttempts = async (req, res) => {
     });
     res.json(attempts);
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
     console.error("getAllAttempts error:", err);
     res.status(500).json({ error: "Server error" });
   }
@@ -174,6 +185,7 @@ exports.getAttemptDetail = async (req, res) => {
     }
     res.json(detail);
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
     console.error("getAttemptDetail error:", err);
     const errorMsg = err.message || "Server error";
       res.status(err.status || 500).json({ error: errorMsg });
@@ -182,18 +194,20 @@ exports.getAttemptDetail = async (req, res) => {
 
 exports.getUnassignedQuestions = async (req, res) => {
   try {
-    const { part_number, difficulty_level, page = 1, limit = 50 } = req.query;
+    const { part_number, difficulty_level, source_set, page = 1, limit = 50 } = req.query;
     if (!part_number) {
       return res.status(400).json({ error: "part_number is required" });
     }
     const result = await TestsService.adminGetUnassignedQuestions({
       part_number,
+      source_set,
       difficulty_level,
       page: Number(page),
       limit: Number(limit),
     });
     res.json(result);
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
     console.error("getUnassignedQuestions error:", err);
     res.status(500).json({ error: "Server error" });
   }
@@ -213,6 +227,7 @@ exports.assignQuestions = async (req, res) => {
     });
     res.json(result);
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
     console.error("assignQuestions error:", err);
     if (err.message === "TEST_NOT_FOUND") {
       return res.status(404).json({ error: "Test not found" });

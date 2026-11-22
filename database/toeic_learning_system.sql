@@ -5,7 +5,7 @@
 -- psql -h localhost -U postgres -d toeic_assessment -v ON_ERROR_STOP=1 -f toeic_be/database/toeic_learning_system.sql
 -- File có sẵn danh mục kỹ năng/chủ đề; chưa có tài khoản hoặc đề thi mẫu.
 --
--- PHẠM VI (22 bảng): tài khoản, thống kê học tập, từ vựng, ngữ liệu, đề/câu hỏi,
+-- PHẠM VI (25 bảng): tài khoản, thống kê học tập, từ vựng, ngữ liệu, đề/câu hỏi,
 -- lượt làm bài, snapshot câu hỏi, kỹ năng, đánh giá AI và gợi ý luyện tập.
 -- Bỏ SRS, thành tích, XP, cấp độ gamification, streak, mục tiêu và lịch học.
 -- Giữ vocabulary vì backend lấy câu hỏi hiện JOIN vocabulary/vocabulary_topics.
@@ -86,7 +86,44 @@ CREATE TABLE vocabulary (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS user_vocabulary_learning (
+    user_id INTEGER NOT NULL REFERENCES "User"(user_id) ON DELETE CASCADE,
+    vocab_id INTEGER NOT NULL REFERENCES vocabulary(vocab_id) ON DELETE CASCADE,
+    saved BOOLEAN NOT NULL DEFAULT FALSE,
+    status VARCHAR(16) NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'learning', 'known')),
+    needs_review BOOLEAN NOT NULL DEFAULT FALSE,
+    learned_at TIMESTAMPTZ,
+    last_studied_at TIMESTAMPTZ,
+    wrong_count INTEGER NOT NULL DEFAULT 0 CHECK (wrong_count >= 0),
+    PRIMARY KEY (user_id, vocab_id)
+);
+
+CREATE TABLE IF NOT EXISTS vocabulary_study_sessions (
+    session_id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES "User"(user_id) ON DELETE CASCADE,
+    scope_key TEXT NOT NULL,
+    word_ids INTEGER[] NOT NULL,
+    reviewed_ids INTEGER[] NOT NULL DEFAULT '{}',
+    known_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS vocabulary_study_active
+    ON vocabulary_study_sessions(user_id, scope_key) WHERE completed_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS vocabulary_quiz_sessions (
+    session_id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES "User"(user_id) ON DELETE CASCADE,
+    questions JSONB NOT NULL,
+    result JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS vocabulary_quiz_owner ON vocabulary_quiz_sessions(user_id, created_at DESC);
+
 CREATE TABLE reading_passages (
+    translation TEXT,
+    explanation TEXT,
     passage_id SERIAL PRIMARY KEY,
     title VARCHAR(500),
     content TEXT NOT NULL,
@@ -155,6 +192,8 @@ CREATE TABLE answer_choices (
 );
 
 CREATE TABLE user_test_attempts (
+    question_predictions jsonb,
+    ai_prediction jsonb,
     elapsed_seconds INTEGER NOT NULL DEFAULT 0,
     current_index INTEGER NOT NULL DEFAULT 0,
     duration_seconds INTEGER,
@@ -167,6 +206,7 @@ CREATE TABLE user_test_attempts (
     total_correct INTEGER DEFAULT 0,
     total_questions INTEGER DEFAULT 0,
     score INTEGER,
+    grading_result JSONB,
     time_spent INTEGER,
     is_completed BOOLEAN NOT NULL DEFAULT false
 );
@@ -423,7 +463,23 @@ DROP TRIGGER IF EXISTS tests_publication_sync ON tests;
 CREATE TRIGGER tests_publication_sync BEFORE INSERT OR UPDATE ON tests FOR EACH ROW EXECUTE FUNCTION sync_test_publication();
 
 
+ALTER TABLE vocabulary_topics ADD COLUMN IF NOT EXISTS owner_user_id INTEGER REFERENCES "User"(user_id) ON DELETE CASCADE;
+ALTER TABLE vocabulary ADD COLUMN IF NOT EXISTS owner_user_id INTEGER REFERENCES "User"(user_id) ON DELETE CASCADE;
+ALTER TABLE vocabulary_topics DROP CONSTRAINT IF EXISTS vocabulary_topics_name_key;
+CREATE UNIQUE INDEX IF NOT EXISTS vocabulary_topics_personal_name
+    ON vocabulary_topics(owner_user_id, lower(name)) WHERE owner_user_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS vocabulary_topics_legacy_name
+    ON vocabulary_topics(name) WHERE owner_user_id IS NULL;
+CREATE INDEX IF NOT EXISTS vocabulary_personal_owner ON vocabulary(owner_user_id, topic_id);
+
+-- Existing quizzes retain their history but cannot enter the personal learning flow.
+ALTER TABLE vocabulary_quiz_sessions ADD COLUMN IF NOT EXISTS is_personal BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE vocabulary_quiz_sessions ALTER COLUMN is_personal SET DEFAULT TRUE;
+
 COMMIT;
 
 
 
+
+-- Retain deleted tests for attempt history and review.
+ALTER TABLE tests ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;

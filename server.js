@@ -36,7 +36,6 @@ if (fs.existsSync(parentUploadsPath)) {
 // Import routes
 const authRoutes = require("./src/modules/auth/authRoutes");
 const vocabularyStudentRoutes = require("./src/modules/vocabulary/vocabularyStudentRoute");
-const vocabularyAdminRoutes = require("./src/modules/vocabulary/vocabularyAdminRoutes");
 const questionsStudentRoutes = require("./src/modules/questions/studentRoutes");
 const questionsAdminRoutes = require("./src/modules/questions/adminRoutes");
 const testsStudentRoutes = require("./src/modules/tests/testsStudentRoutes");
@@ -48,9 +47,11 @@ const listeningAdminRoutes = require("./src/modules/listening/adminRoutes");
 
 // Setup routes
 app.use("/api/auth", authRoutes);
+app.use('/api/learning-events', require('./src/modules/learning/routes'));
+app.use("/api/ai", require('./src/modules/ai/routes'));
+app.use('/api/admin/learning-reports', require('./src/modules/ai/adminLearningReportRoutes').createAdminLearningReportRouter({pool:require('./db')}));
 
 app.use("/api/student/vocabulary", vocabularyStudentRoutes);
-app.use("/api/admin/vocabulary", vocabularyAdminRoutes);
 
 app.use("/api/questions", questionsStudentRoutes);
 app.use("/api/admin/questions", questionsAdminRoutes);
@@ -63,14 +64,17 @@ app.use("/api/users", usersStudentRoutes);
 app.use("/api/admin/listening", listeningAdminRoutes);
 
 
-app.get("/api", (req, res) =>
+app.get("/api", async (req, res, next) => {
+  try {
+  const tracking = await require('./src/modules/learning/environmentStatus').environmentStatus(require('./db'));
+  res.setHeader('Cache-Control', 'no-store');
   res.json({
     message: "TOEIC API is running",
     version: "1.0.0",
+    learning_events: tracking,
     endpoints: [
       "/api/auth",
       "/api/student/vocabulary",
-      "/api/admin/vocabulary",
       "/api/tests",
       "/api/admin/tests",
       "/api/questions",
@@ -80,8 +84,9 @@ app.get("/api", (req, res) =>
       "/api/users",
       "/api/admin/listening",
     ],
-  })
-);
+  });
+  } catch (error) { next(error); }
+});
 
 // Consistent JSON errors for parser/upload limits, including oversized ZIPs.
 app.use((err, req, res, next) => {

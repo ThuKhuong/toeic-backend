@@ -4,3 +4,7 @@ uploads/
 *.log
 .DS_Store
 .import-tmp/
+private/ai/
+private/
+database/.verify_pg_ai/
+private/learning-*/version.key

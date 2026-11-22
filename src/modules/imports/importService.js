@@ -27,6 +27,10 @@ function validateItems(input, kind, initialErrors = []) {
       return q;
     }
     q.part_number = Number(raw.part_number);
+    if(raw.source_set != null) {
+      q.source_set = text(raw.source_set).replace(/\s+/g,' ');
+      if(!q.source_set || q.source_set.length>150) fail('source_set','Tên bộ đề bắt buộc, tối đa 150 ký tự.');
+    }
     if (!(kind === 'listening' ? [1,2,3,4] : [5,6,7]).includes(q.part_number)) fail('part_number', 'Part không hợp lệ cho luồng nhập này.');
     q.question_text = text(raw.question_text); q.correct_answer = text(raw.correct_answer).toUpperCase(); q.explanation = text(raw.explanation) || null;
     if (q.part_number >= 3 && !q.question_text) fail('question_text', 'Thiếu nội dung câu hỏi.');
@@ -47,7 +51,7 @@ function validateItems(input, kind, initialErrors = []) {
     if (q.part_number >= 6) {
       q.passages = Array.isArray(raw.passages) ? raw.passages : raw.passage ? [raw.passage] : [];
       if (!q.passages.length || q.passages.length > (q.part_number === 6 ? 1 : 3)) fail('passage_keys', 'Part 6 cần 1 ngữ liệu; Part 7 cần từ 1 đến 3 ngữ liệu.');
-      q.passages = q.passages.map(p => ({ title: text(p.title), content: text(p.content), image_url: text(p.image_url) || null, difficulty_level: 1 }));
+      q.passages = q.passages.map(p => ({ title: text(p.title), content: text(p.content), image_url: text(p.image_url) || null, translation: text(p.translation), explanation: text(p.explanation), difficulty_level: 1 }));
       for (const p of q.passages) {
         if (!p.content && !p.image_url) fail('passage', 'Ngữ liệu cần nội dung hoặc hình ảnh.');
       }
@@ -89,6 +93,16 @@ async function saveBatch(items, kind, context = {}) {
       const errors = items.filter(q => q.topic_id && !found.has(q.topic_id)).map(q => error(q._source, 'topic_id', 'Chủ đề không tồn tại.'));
       if (errors.length) throw invalid(errors, items.length);
     }
+    const sourceRows = items.filter(q => q.source_set);
+    for (const q of sourceRows) {
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`source:${q.source_set.toLowerCase()}:${q.part_number}`]);
+    }
+    const conflicts = [];
+    for (const q of sourceRows) {
+      const found = await client.query('SELECT question_id FROM questions WHERE lower(source_set)=lower($1) AND part_number=$2 AND source_question_number=$3', [q.source_set,q.part_number,q.order_in_test]);
+      if(found.rows.length) conflicts.push(error(q._source,'question_number',`Bộ ${q.source_set}, Part ${q.part_number} đã có câu ${q.order_in_test}. Chọn bộ khác hoặc xóa câu cũ trước khi nhập lại.`));
+    }
+    if(conflicts.length) throw invalid(conflicts,items.length);
     const results = [], materials = new Map(), groups = new Map();
     for (const q of items) {
       try {
@@ -112,7 +126,7 @@ async function saveBatch(items, kind, context = {}) {
             const g = (await client.query('INSERT INTO question_groups(title,part_number,material_id) VALUES ($1,$2,$3) RETURNING group_id', [q.passages?.[0]?.title || q.material?.title || null,q.part_number,materialId])).rows[0];
             let firstId = null;
             for (const [i,p] of (q.passages || []).entries()) {
-              const row = (await client.query('INSERT INTO reading_passages(title,content,image_url,difficulty_level) VALUES ($1,$2,$3,$4) RETURNING passage_id', [p.title,p.content,p.image_url,p.difficulty_level])).rows[0];
+              const row = (await client.query('INSERT INTO reading_passages(title,content,image_url,difficulty_level,translation,explanation) VALUES ($1,$2,$3,$4,$5,$6) RETURNING passage_id', [p.title,p.content,p.image_url,p.difficulty_level,p.translation || null,p.explanation || null])).rows[0];
               if (i === 0) firstId = row.passage_id;
               await client.query('INSERT INTO question_group_passages(group_id,passage_id,position) VALUES ($1,$2,$3)', [g.group_id,row.passage_id,i+1]);
             }
@@ -121,6 +135,7 @@ async function saveBatch(items, kind, context = {}) {
           ({groupId,passageId} = groups.get(q.group_key));
         }
         const row = (await client.query(`INSERT INTO questions(question_text,question_type,part_number,passage_id,material_id,group_id,image_url,correct_answer,explanation,difficulty_level,order_in_test) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`, [q.question_text || null,kind === 'listening' ? 'listening' : 'reading',q.part_number,passageId,materialId,groupId,q.image_url || null,q.correct_answer,q.explanation,q.difficulty_level,q.order_in_test || null])).rows[0];
+        if(q.source_set) { await client.query('UPDATE questions SET source_set=$1, source_question_number=$3 WHERE question_id=$2',[q.source_set,row.question_id,q.order_in_test || null]); row.source_set=q.source_set; }
         for (const c of q.choices) await client.query('INSERT INTO answer_choices(question_id,choice_label,choice_text,is_correct) VALUES ($1,$2,$3,$4)', [row.question_id,c.label,c.text,c.label===q.correct_answer]);
         results.push({...row,choices:q.choices,passages:q.passages || []});
       } catch (e) {

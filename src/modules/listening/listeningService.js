@@ -1,3 +1,4 @@
+const { assertMaterialEditable, assertQuestionsDeletable, withContentTransaction } = require('../tests/contentGuard');
 const ListeningModel = require("./listeningModel");
 const pool = require("../../../db");
 const fs = require("fs");
@@ -29,7 +30,10 @@ class ListeningService {
   }
 
   static async updateListeningMaterial(id, material) {
-    const updated = await ListeningModel.updateListeningMaterial(id, material);
+    const updated = await withContentTransaction(async client => {
+      await assertMaterialEditable(client, id);
+      return ListeningModel.updateListeningMaterial(id, material, client);
+    });
     if (!updated) {
       throw new Error("Listening material not found");
     }
@@ -311,45 +315,7 @@ class ListeningService {
         return null; // Câu hỏi không tồn tại hoặc không phải listening question
       }
 
-      // 2. Kiểm tra xem có người đã làm câu hỏi này chưa
-      const checkUsage = await client.query(
-        `SELECT COUNT(*) as count 
-         FROM user_answers 
-         WHERE question_id = $1`,
-        [id]
-      );
-
-      const usageCount = parseInt(checkUsage.rows[0].count);
-      if (usageCount > 0) {
-        await client.query("ROLLBACK");
-        throw new Error(
-          `Không thể xóa câu hỏi: Câu hỏi này đã được ${usageCount} người dùng làm bài. Vui lòng xóa câu hỏi khỏi đề thi trước hoặc liên hệ quản trị viên.`
-        );
-      }
-
-      // 3. Kiểm tra xem câu hỏi có trong đề thi nào không
-      const question = checkQuestion.rows[0];
-      const testId = question.test_id;
-
-      // Kiểm tra test_id có giá trị hợp lệ (không null, không undefined, không 0)
-      // test_id là INTEGER nên nếu có giá trị thì phải > 0
-      if (testId != null && testId !== undefined && testId !== 0) {
-        // Kiểm tra xem test có tồn tại không
-        const checkTest = await client.query(
-          `SELECT test_id, test_name, is_active 
-           FROM tests 
-           WHERE test_id = $1`,
-          [testId]
-        );
-        // Kiểm tra xem test có tồn tại không
-        if (checkTest.rows.length > 0) {
-          const test = checkTest.rows[0];
-          await client.query("ROLLBACK");
-          throw new Error(
-            `Không thể xóa câu hỏi: Câu hỏi này đang được sử dụng trong đề thi "${test.test_name}" (ID: ${test.test_id}). Vui lòng xóa câu hỏi khỏi đề thi trước.`
-          );
-        }
-      }
+      await assertQuestionsDeletable(client, checkQuestion.rows);
 
       // 4. Nếu không có ràng buộc, tiến hành xóa
       // Xóa cả câu hỏi có question_type = 'listening' hoặc NULL (câu hỏi cũ)
