@@ -45,14 +45,10 @@ async function getTestQuestions(test_id) {
           rp.title as passage_title, rp.content as passage_content, to_jsonb(rp)->>'translation' as passage_translation, to_jsonb(rp)->>'explanation' as passage_explanation,
           rp.image_url as passage_image_url,
            lm.title as material_title, lm.audio_url as material_audio,
-           lm.transcript as material_transcript,
-           v.word as vocab_word, v.meaning_vi as vocab_meaning,
-           v.topic_id as vocab_topic_id, vt.name as vocab_topic_name
+           lm.transcript as material_transcript
     FROM questions q
     LEFT JOIN reading_passages rp ON q.passage_id = rp.passage_id
     LEFT JOIN listening_materials lm ON q.material_id = lm.material_id
-    LEFT JOIN vocabulary v ON q.vocab_id = v.vocab_id
-    LEFT JOIN vocabulary_topics vt ON v.topic_id = vt.topic_id
     WHERE q.test_id = $1
     ORDER BY q.order_in_test ASC, q.question_id ASC
   `;

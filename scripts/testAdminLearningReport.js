@@ -51,7 +51,7 @@ test('saved experimental AI is distinct from ability; reject late/bad artifact r
     questions:[{question_id:1,part:5,probability:0.6},{question_id:999,part:5,probability:0.8}]};
   a.ai_prediction={as_of:a.end_time,completed_at:'2026-11-18T02:00:01Z',parts:[{status:'ready',part:5,model:'lightgbm_v2',artifact_sha256:hashes.v2,probability:0.7}]};
   const r=report([answer(1)],[a]);
-  assert.equal(r.parts[4].ai.status,'experimental_unvalidated');
+  assert.equal(r.parts[4].ai.status,'ready');
   assert.equal(r.parts[4].evidence_status,'insufficient_data');
   assert.equal(r.parts[4].ai.v2_forecasts,1);
   assert.equal(r.parts[4].ai.v3_question_predictions,1);

@@ -7,6 +7,8 @@ const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-
 const positive=value=>Number.isSafeInteger(value)&&value>0&&value<=2147483647;
 const types=new Set(['QUESTION_VIEWED','ANSWER_SUBMITTED','ANSWER_CHANGED','AUDIO_PLAYED','EXPLANATION_VIEWED','LESSON_STARTED','LESSON_COMPLETED']);
 async function approvedMapping(client,q) {
+  const exists=(await client.query("SELECT to_regclass('learning_kc_mapping_versions') AS t")).rows[0]?.t;
+  if(!exists)return null;
   return (await client.query(`SELECT * FROM learning_kc_mapping_versions
     WHERE question_id=$1 AND question_version=$2 AND review_status='approved'`,[q.question_id,versionOf(q)])).rows[0]||null;
 }

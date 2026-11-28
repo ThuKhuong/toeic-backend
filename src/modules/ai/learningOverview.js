@@ -16,7 +16,7 @@ function normalizedAnswer(row) {
 
 function buildLearningOverview(rows, availableParts = [1, 2, 3, 4, 5, 6, 7]) {
   const parts = Array.from({ length: 7 }, (_, i) => ({ part: i + 1, total: 0, answered: 0,
-    correct: 0, unanswered: 0, firstAnswers: [], attempts: new Set(), versions: new Set(), history: new Map() }));
+    correct: 0, unanswered: 0, firstAnswers: [], attempts: new Set(), versions: new Set(), contentAnswered: new Set(), history: new Map() }));
   const ordered = [...rows].sort((a, b) => new Date(a.end_time) - new Date(b.end_time) ||
     Number(a.attempt_id) - Number(b.attempt_id) || Number(a.position) - Number(b.position));
   const seenAnswered = new Set(), allAttempts = new Set();
@@ -38,6 +38,7 @@ function buildLearningOverview(rows, availableParts = [1, 2, 3, 4, 5, 6, 7]) {
     if (!validChoice(row.user_answer)) { current.unanswered++; point.unanswered++; continue; }
     const correct = Number(row.user_answer === snapshot.correct_answer);
     current.answered++; current.correct += correct;
+    current.contentAnswered.add(fingerprint(snapshot));
     point.answered++; point.correct += correct; point.incorrect += 1 - correct;
     // Repeated memorized answers must not become fresh ability evidence.
     if (seenAnswered.has(version)) { point.repeat_answers++; continue; }
@@ -71,7 +72,7 @@ function buildLearningOverview(rows, availableParts = [1, 2, 3, 4, 5, 6, 7]) {
     }
     return { part: p.part, total: p.total, answered: p.answered, correct: p.correct,
       incorrect: p.answered - p.correct, unanswered: p.unanswered, attempts: p.attempts.size,
-      distinct_question_versions: p.versions.size, repeat_answers: p.answered - p.firstAnswers.length,
+      distinct_question_versions: p.versions.size, content_distinct_answered: p.contentAnswered.size, repeat_answers: p.answered - p.firstAnswers.length,
       correct_rate: rate(p.correct, p.answered),
       first_answers: { answered: p.firstAnswers.length, correct: firstCorrect,
         incorrect: p.firstAnswers.length - firstCorrect, correct_rate: rate(firstCorrect, p.firstAnswers.length) },

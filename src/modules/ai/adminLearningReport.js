@@ -83,8 +83,8 @@ function buildAdminReport(learner, rows, attempts, eventRows, context, hashes, a
     first_accuracy: p.first_answers.correct_rate, practice_available: p.practice_available,
     evidence_status: p.total === 0 ? 'no_data' : p.evidence_status === 'reviewable_sample' ? 'descriptive_history' : 'insufficient_data',
     trend:p.trend, history_points:p.history_points,
-    ai: { ...predictions[index], status: predictions[index].v2_forecasts + predictions[index].v3_question_predictions > 0 ? 'experimental_unvalidated' : 'not_recorded',
-      v2_estimate:p.ai.status==='experimental_unvalidated'?p.ai:null } }));
+    ai: { ...predictions[index], status: predictions[index].v2_forecasts + predictions[index].v3_question_predictions > 0 ? 'ready' : 'not_recorded',
+      v2_estimate:['ready','experimental_unvalidated'].includes(p.ai.status)?p.ai:null } }));
   const counts = Object.fromEntries(TYPES.map(t => [t, 0])); let late = 0, latestEvent = null;
   for (const e of eventRows) {
     if (!TYPES.includes(e.event_type)) continue;
@@ -98,15 +98,17 @@ function buildAdminReport(learner, rows, attempts, eventRows, context, hashes, a
       last_event_received_at: latestEvent ? new Date(latestEvent).toISOString() : null },
     total: { attempt_count: t.attempts, presented: t.total, answered: t.answered, correct: t.correct,
       incorrect: t.answered - t.correct, unanswered: t.unanswered, first_answers: t.first_answered, repeat_answers: t.repeat_answers },
-    parts, recommendations:overview.recommendations,
+    parts, recommendations:overview.recommendations, ai_ranking:overview.ai_ranking,
     learning_events: { total: Object.values(counts).reduce((a,b) => a+b,0), by_type: counts, received_after_completion: late,
       scope: 'All persisted owned events up to as_of, including unfinished attempts and lessons; answer statistics use completed attempts only.' },
-    policy: { method: 'descriptive_rules', display_minimum_first_answers: overview.evidence_policy.ranking_minimum_distinct_answers,
-      threshold_is_product_policy: true, ai_validation_status: 'not_approved', inference_called: false, strength_weakness_enabled: false,
-      prediction_counts_mean: 'Saved experimental predictions with basic artifact/timing checks; not a replay audit or ability estimate. V2 forecasts concern a subsequent attempt.' },
+    policy: { method: overview.policy.method, recommendation_method: overview.policy.recommendation_method,
+      display_minimum_first_answers: overview.evidence_policy.ranking_minimum_distinct_answers,
+      threshold_is_product_policy: true, ai_validation_status: overview.policy.ai_validation_status,
+      inference_called: false, strength_weakness_enabled: overview.policy.strength_weakness_enabled,
+      prediction_counts_mean: 'Saved V2 predictions with artifact/timing verification; supports relative Part competency and practice priority when minimum distinct answers are met.' },
     diagnostics: { invalid_snapshots: invalidSnapshots, invalid_answers: invalidAnswers, rejected_prediction_records: rejectedPredictionRecords },
-    limitations: [overview.limitation, 'Ngưỡng hiển thị chỉ là quy tắc sản phẩm, không chứng nhận đủ dữ liệu đánh giá năng lực.',
-      'Chỉ đếm dự đoán đã lưu; chưa xác nhận hiệu quả AI. Không kết luận Part mạnh/yếu.',
+    limitations: [overview.limitation, 'Chỉ đánh giá mạnh/yếu và xếp hạng AI cho các Part có tối thiểu 10 câu trả lời lần đầu.',
+      'Dự đoán LightGBM V2 phản ánh xác suất trả lời đúng ở lượt tiếp theo theo Part.',
       'Sự kiện chưa đồng bộ trên thiết bị chưa xuất hiện trong báo cáo.'] };
 }
 

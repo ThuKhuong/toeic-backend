@@ -61,10 +61,7 @@ async function startAttempt(userId, testId) {
             g.image_url AS group_image_url,
             COALESCE((SELECT jsonb_agg(ac ORDER BY ac.choice_label)
               FROM answer_choices ac WHERE ac.question_id=q.question_id), '[]') AS choices,
-            COALESCE((SELECT jsonb_agg(jsonb_build_object('skill_id', s.skill_id,
-              'code', s.code, 'name', s.name, 'weight', qs.weight))
-              FROM question_skills qs JOIN skills s USING (skill_id)
-              WHERE qs.question_id=q.question_id), '[]') AS skills,
+            '[]'::jsonb AS skills,
             COALESCE((SELECT jsonb_agg(jsonb_build_object('passage_id', p.passage_id,
               'title', p.title, 'content', p.content, 'image_url', p.image_url,
               'translation', to_jsonb(p)->>'translation', 'explanation', to_jsonb(p)->>'explanation',

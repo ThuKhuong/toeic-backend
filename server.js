@@ -52,6 +52,7 @@ app.use("/api/ai", require('./src/modules/ai/routes'));
 app.use('/api/admin/learning-reports', require('./src/modules/ai/adminLearningReportRoutes').createAdminLearningReportRouter({pool:require('./db')}));
 
 app.use("/api/student/vocabulary", vocabularyStudentRoutes);
+app.use("/api/admin/vocabulary", require("./src/modules/vocabulary/vocabularyAdminRoutes"));
 
 app.use("/api/questions", questionsStudentRoutes);
 app.use("/api/admin/questions", questionsAdminRoutes);

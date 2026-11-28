@@ -35,4 +35,13 @@ async function register({ email, password, full_name, role }) {
   return { token, user: newUser };
 }
 
-module.exports = { login, register };
+async function forgotPassword(email, newPassword) {
+  const user = await AuthModel.getUserByEmail(email);
+  if (!user) throw new Error("USER_NOT_FOUND");
+  const hash = await bcrypt.hash(newPassword, 10);
+  const updated = await AuthModel.updatePasswordByEmail(user.email, hash);
+  if (!updated) throw new Error("USER_NOT_FOUND");
+  return { success: true, message: "Đặt lại mật khẩu thành công" };
+}
+
+module.exports = { login, register, forgotPassword };

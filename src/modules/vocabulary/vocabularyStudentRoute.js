@@ -10,6 +10,7 @@ const handle = work => async (req, res, next) => {
   try { res.json(await work(req)); } catch (error) { next(error); }
 };
 router.get('/', handle(req => service.list(req.user.user_id)));
+router.get('/dictionary', handle(req => service.dictionary(req.query.q)));
 router.get('/categories/list', handle(req => service.topics(req.user.user_id)));
 router.post('/topics', handle(req => service.createTopic(req.user.user_id, req.body ?? {})));
 router.put('/topics/:id', handle(req => service.updateTopic(req.user.user_id, req.params.id, req.body ?? {})));

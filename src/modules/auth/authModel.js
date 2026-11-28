@@ -4,7 +4,7 @@ const pool = require("../../../db");
 async function getUserByEmail(email) {
   const r = await pool.query(
     `SELECT user_id, email, password_hash, full_name, avatar_url, role, is_active
-     FROM "User" WHERE email = $1 LIMIT 1`,
+     FROM "User" WHERE LOWER(email) = LOWER($1) LIMIT 1`,
     [email]
   );
   return r.rows[0] || null;
@@ -25,4 +25,15 @@ async function createUser({ email, password_hash, full_name, role }) {
   return u;
 }
 
-module.exports = { getUserByEmail, createUser };
+async function updatePasswordByEmail(email, password_hash) {
+  const r = await pool.query(
+    `UPDATE "User"
+     SET password_hash = $2, updated_at = CURRENT_TIMESTAMP
+     WHERE LOWER(email) = LOWER($1)
+     RETURNING user_id, email, full_name, role, is_active`,
+    [email, password_hash]
+  );
+  return r.rows[0] || null;
+}
+
+module.exports = { getUserByEmail, createUser, updatePasswordByEmail };

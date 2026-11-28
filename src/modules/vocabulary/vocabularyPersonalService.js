@@ -47,6 +47,22 @@ async function transaction(work) {
 
 module.exports = {
   wordInput,
+  async dictionary(query = '') {
+    const q = typeof query === 'string' ? query.trim() : '';
+    if (q.length > 100) fail(400, 'Từ khóa tìm kiếm tối đa 100 ký tự.');
+    const pattern = q ? `%${q}%` : null;
+    const rows = (await pool.query(`
+      SELECT v.vocab_id, v.word, v.meaning_vi, v.meaning_en, v.pronunciation,
+             v.part_of_speech, v.example_sentence, v.example_translation,
+             v.topic_id, t.name AS topic_name
+      FROM vocabulary v
+      LEFT JOIN vocabulary_topics t ON t.topic_id = v.topic_id AND t.owner_user_id IS NULL
+      WHERE v.owner_user_id IS NULL
+        AND ($1::text IS NULL OR v.word ILIKE $1 OR v.meaning_vi ILIKE $1 OR COALESCE(t.name, '') ILIKE $1)
+      ORDER BY lower(v.word), v.vocab_id
+      LIMIT 80`, [pattern])).rows;
+    return { success: true, data: rows };
+  },
   async list(userId) {
     const rows = (await pool.query('SELECT * FROM vocabulary WHERE owner_user_id=$1 ORDER BY topic_id NULLS LAST, lower(word), vocab_id', [userId])).rows;
     return { success: true, data: rows };
